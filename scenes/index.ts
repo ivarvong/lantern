@@ -10,12 +10,14 @@ import { PyexLimitsScene } from './pyex-limits.ts';
 import { JustBashScene } from './just-bash.ts';
 import { ExgitScene } from './exgit.ts';
 import { LanternScene } from './lantern.ts';
+import { RepackScene } from './repack.ts';
 
 /** A registered scene: the player's label, the class, and the doc for doc scenes. */
 export interface SceneEntry { label: string; Scene: SceneClass; doc?: Doc }
 
 export const SCENES: Record<string, SceneEntry> = {
   'lantern': { label: 'Lantern, drawn by Lantern', Scene: LanternScene },
+  'repack': { label: 'Repacking git in 64MB', Scene: RepackScene },
   'exgit': { label: 'exgit: git from the inside', Scene: ExgitScene },
   'just-bash': { label: 'just_bash: a bash with no processes', Scene: JustBashScene },
   'pyex-limits': { label: 'pyex #29: cooperative resource limits', Scene: PyexLimitsScene },
