@@ -153,12 +153,16 @@ function vmobjectAttrs(m: VMobject, s: StyleRecord, pd: { d: string }): Attrs {
       d: pd.d,
       fill: s.fill,
       'fill-opacity': fmt(s.fillOpacity),
-      stroke: s.stroke,
-      'stroke-width': len(s.strokeWidth),
-      'stroke-opacity': fmt(s.strokeOpacity),
-      'stroke-linejoin': 'round',
-      'stroke-linecap': 'round',
     };
+    // stroke="none" with a stroke-width still paints a hairline in WebKit, which
+    // reads as a second, softer copy of every glyph. Omit the stroke paint entirely.
+    if (s.stroke !== 'none') {
+      attrs.stroke = s.stroke;
+      attrs['stroke-width'] = len(s.strokeWidth);
+      attrs['stroke-opacity'] = fmt(s.strokeOpacity);
+      attrs['stroke-linejoin'] = 'round';
+      attrs['stroke-linecap'] = 'round';
+    } else attrs.stroke = 'none';
     if (s.opacity < 1) attrs.opacity = fmt(s.opacity);
     if (s.drawFraction != null && s.drawFraction < 1) {
       const L = perf.span('arcLength', () => m.arcLength()) + 0.001;
