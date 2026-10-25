@@ -14,6 +14,8 @@
 //   flicker    a leaf vanishes and comes back within a few frames
 //   handoff    one leaf is replaced by another in the same frame (a
 //              ReplacementTransform) but the replacement is somewhere else
+//   ghost      two texts overlap while both are only partly opaque (a crossfade)
+//   overflow   a label whose center sits in its shape sticks out of that shape
 //
 // A cut-out and cut-in in the same frame with matching boxes is a seamless
 // handoff and is not reported. Every event carries the step it happened in.
@@ -21,6 +23,8 @@
 import { VMobject } from './vmobject.ts';
 import type { Box, HasText, Mobject } from './mobject.ts';
 import type { Scene, Sink } from './scene.ts';
+import { Text } from './text.ts';
+import { Labeled } from './shapes.ts';
 
 /** Thresholds for analyzeMotion(); see DEFAULTS. */
 export interface MotionOptions {
@@ -37,7 +41,7 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow';
 export interface MotionEvent { kind: MotionKind; frame: number; t: number; step: string | null; what: string; magnitude: number; detail: string }
 export interface MotionSummary { kind: MotionKind; step: string | null; frame: number; t: number; count: number; max: number; examples: string[] }
 
@@ -73,7 +77,10 @@ function describeLeaf(m: Mobject): string {
 export class MotionSink implements Sink {
   frames: MotionFrame[];
   labels: Map<number, string>;
-  constructor() { this.frames = []; this.labels = new Map(); }
+  /** Text-layout failures sampled while the scene runs. One per offending mobject. */
+  layoutEvents: MotionEvent[];
+  private layoutSeen: Set<string>;
+  constructor() { this.frames = []; this.labels = new Map(); this.layoutEvents = []; this.layoutSeen = new Set(); }
   async frame(scene: Scene): Promise<void> {
     const f = new Map<number, LeafSample>();
     const walk = (m: Mobject): void => {
@@ -95,6 +102,90 @@ export class MotionSink implements Sink {
     };
     for (const top of scene.mobjects) walk(top);
     this.frames.push({ t: scene.time, step: scene.currentStep?.path ?? null, leaves: f });
+    this.sampleLayout(scene);
+  }
+
+  /**
+   * Two checks that a screenshot of a phone makes obvious and a motion spike does not:
+   * a centered label must sit inside its shape, and two texts must not occupy the
+   * same box while both are only partly opaque (a crossfade reads as smeared type).
+   */
+  private sampleLayout(scene: Scene): void {
+    const frame = this.frames.length - 1;
+    const step = scene.currentStep?.path ?? null;
+    const t = +scene.time.toFixed(3);
+    const texts: Text[] = [];
+    const seenText = new Set<Text>();
+    const walkText = (m: Mobject): void => {
+      if (m instanceof Text) {
+        if (!seenText.has(m)) { seenText.add(m); texts.push(m); }
+        return;
+      }
+      for (const c of m.children) walkText(c);
+    };
+    for (const top of scene.mobjects) walkText(top);
+
+    const shown = (m: Text): number => {
+      if (!m.children.length) return m.style.opacity ?? 1;
+      let max = 0;
+      for (const c of m.children) max = Math.max(max, alphaOf(c));
+      return max;
+    };
+    const partial: Array<{ m: Text; a: number; box: Box }> = [];
+    for (const m of texts) {
+      const a = shown(m);
+      const b = m.box();
+      if (b && a > 0.12 && a < 0.88) partial.push({ m, a, box: b });
+    }
+    for (let i = 0; i < partial.length; i++) {
+      for (let j = i + 1; j < partial.length; j++) {
+        const A = partial[i]!, B = partial[j]!;
+        const ix = Math.max(0, Math.min(A.box[2], B.box[2]) - Math.max(A.box[0], B.box[0]));
+        const iy = Math.max(0, Math.min(A.box[3], B.box[3]) - Math.max(A.box[1], B.box[1]));
+        const inter = ix * iy;
+        const area = (r: Box) => Math.max(1e-9, (r[2] - r[0]) * (r[3] - r[1]));
+        if (inter <= 0.2 * Math.min(area(A.box), area(B.box))) continue;
+        const key = `ghost:${Math.min(A.m.id, B.m.id)}:${Math.max(A.m.id, B.m.id)}`;
+        if (this.layoutSeen.has(key)) continue;
+        this.layoutSeen.add(key);
+        const what = `"${A.m.text.slice(0, 24)}" × "${B.m.text.slice(0, 24)}"`;
+        this.layoutEvents.push({ kind: 'ghost', frame, t, step, what, magnitude: +Math.min(A.a, B.a).toFixed(3), detail: `both at partial opacity (${A.a.toFixed(2)}, ${B.a.toFixed(2)})` });
+      }
+    }
+
+    // A label whose center lies in its shape is supposed to be inside it.
+    // Labels placed beside a shape (nextTo) have their center outside and are skipped.
+    const tol = 0.04;
+    const walkLabeled = (m: Mobject): void => {
+      if (m instanceof Labeled && m.label && m.shape !== m.label) {
+        const shapeBox = m.shape.box();
+        const labels = m.label instanceof Text ? [m.label] : [];
+        if (!(m.label instanceof Text)) {
+          const inner: Text[] = [];
+          const w = (n: Mobject): void => { if (n instanceof Text) inner.push(n); else for (const c of n.children) w(c); };
+          w(m.label);
+          labels.push(...inner);
+        }
+        if (shapeBox) for (const label of labels) {
+          // Only a settled label. A fade's first frames are still near opacity 1
+          // while the text has begun to move, and that is not a layout error.
+          if (shown(label) < 0.995) continue;
+          const lb = label.box();
+          if (!lb) continue;
+          const cx = (lb[0] + lb[2]) / 2, cy = (lb[1] + lb[3]) / 2;
+          const inside = cx > shapeBox[0] && cx < shapeBox[2] && cy > shapeBox[1] && cy < shapeBox[3];
+          if (!inside) continue;
+          const overflow = Math.max(shapeBox[0] - lb[0], shapeBox[1] - lb[1], lb[2] - shapeBox[2], lb[3] - shapeBox[3]);
+          if (overflow <= tol) continue;
+          const key = `overflow:${label.id}`;
+          if (this.layoutSeen.has(key)) continue;
+          this.layoutSeen.add(key);
+          this.layoutEvents.push({ kind: 'overflow', frame, t, step, what: `"${label.text.slice(0, 32)}"`, magnitude: +overflow.toFixed(3), detail: `sticks out of its box by ${overflow.toFixed(3)}` });
+        }
+      }
+      for (const c of m.children) walkLabeled(c);
+    };
+    for (const top of scene.mobjects) walkLabeled(top);
   }
 }
 
@@ -111,7 +202,7 @@ const iou = (a0: Box, b0: Box): number => {
 export function analyzeMotion(sink: MotionSink, opts: MotionOptions = {}): MotionEvent[] {
   const o = { ...DEFAULTS, ...opts };
   const F = sink.frames;
-  const events: MotionEvent[] = [];
+  const events: MotionEvent[] = [...sink.layoutEvents];
   const ev = (kind: MotionKind, f: number, id: number, magnitude: number, detail = '') =>
     events.push({ kind, frame: f, t: +F[f]!.t.toFixed(3), step: F[f]!.step, what: sink.labels.get(id) ?? `#${id}`, magnitude: +magnitude.toFixed(3), detail });
 

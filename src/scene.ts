@@ -177,9 +177,22 @@ export class Scene {
   familyMembers(): Mobject[] { return this.mobjects.flatMap((m) => m.family()); }
 
   add(...mobs: Mobject[]): this {
-    // Re-adding moves to the front; adding a child of something present is a no-op
-    this.mobjects = this.mobjects.filter((m) => !mobs.includes(m));
-    this.mobjects.push(...mobs);
+    // Re-adding moves to the front. A mobject drawn through a parent must not
+    // also be a root, or the renderer paints it twice (the smeared text).
+    // Adding a child of something already on screen is a no-op.
+    const covered = new Set<Mobject>();
+    for (const m of mobs) for (const f of m.family()) covered.add(f);
+    this.mobjects = this.mobjects.filter((m) => !covered.has(m));
+    const present = new Set<Mobject>();
+    for (const top of this.mobjects) for (const f of top.family()) present.add(f);
+    const roots: Mobject[] = [];
+    for (const m of mobs) {
+      if (present.has(m)) continue;
+      for (let i = roots.length - 1; i >= 0; i--) if (m.family().includes(roots[i]!)) roots.splice(i, 1);
+      roots.push(m);
+      for (const f of m.family()) present.add(f);
+    }
+    this.mobjects.push(...roots);
     return this;
   }
 

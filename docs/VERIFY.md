@@ -81,6 +81,8 @@ scenes: intermediate morph shapes move by up to 0.24 units; endpoints are unchan
 | cut-in / cut-out | a leaf appears or vanishes already mostly opaque |
 | flicker | a leaf vanishes and returns within 3 frames |
 | handoff | a replacement lands somewhere other than what it replaced |
+| ghost | two texts overlap while both opacities are between 0.12 and 0.88 (a crossfade; outgoing text must finish before the next text starts) |
+| overflow | a label whose center lies inside its shape extends more than 0.04 past that shape (text is centered on its advance box, so a label no longer needs a hand-tuned baseline offset) |
 
 A `Text` is tracked as one unit: its glyphs are rebuilt when the string changes, so
 per-glyph identity means nothing there. Each event names the step, time and leaf

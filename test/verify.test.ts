@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Rectangle, Circle, Text, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, MotionSink, analyzeMotion, linear, RIGHT } from '../src/index.ts';
+import { Scene, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, MotionSink, analyzeMotion, linear, RIGHT } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -78,6 +78,43 @@ test('a left-anchored counter changing digit count is not a resize', async () =>
     await s.play(new Transform(n, n.copy().setValue(9)), { runTime: 0.3 });
   });
   assert.deepEqual(kinds, []);
+});
+
+test('two texts crossfading in one place are a ghost; out-then-in is not', async () => {
+  const cross = await run(async (s) => {
+    const a = new Text('now', { fontSize: 0.5 });
+    const b = new Text('next', { fontSize: 0.5 });
+    s.add(a);
+    await s.play(new FadeOut(a), new FadeIn(b), { runTime: 0.4 });
+  });
+  assert.ok(cross.includes('ghost'), `crossfade should ghost, got ${cross}`);
+  const sequenced = await run(async (s) => {
+    const a = new Text('now', { fontSize: 0.5 });
+    const b = new Text('next', { fontSize: 0.5 });
+    s.add(a);
+    await s.play(new FadeOut(a), { runTime: 0.3 });
+    await s.play(new FadeIn(b), { runTime: 0.3 });
+  });
+  assert.deepEqual(sequenced, []);
+});
+
+test('a label that crosses its rectangle is overflow; a centered one is not', async () => {
+  const high = await run(async (s) => {
+    const label = new Text('HTTP 400', { fontSize: 0.4 });
+    const rect = new Rectangle({ width: 3, height: 0.7 });
+    const g = new Labeled(rect, label, { center: false });
+    label.shift([0, 0.22]);
+    s.add(g);
+    await s.wait(0.2);
+  });
+  assert.ok(high.includes('overflow'), `expected overflow, got ${high}`);
+  const fit = await run(async (s) => {
+    const label = new Text('HTTP 400', { fontSize: 0.4 });
+    const rect = new Rectangle({ width: label.width() + 0.8, height: label.height() + 0.4 });
+    s.add(new Labeled(rect, label));
+    await s.wait(0.2);
+  });
+  assert.deepEqual(fit, []);
 });
 
 test('every example scene is free of motion discontinuities', async () => {
