@@ -1,6 +1,6 @@
 // ply /view: the public read-only repo viewer.
 //
-// Source: ivarvong/ply pull/2, commit e4c7c83212eb3809f3a52b4220f4d90f71fb3c22
+// Source: ivarvong/ply pull/2, commit 3f07a75c667ab8afad9e91d396836eb21abb1b8f
 // (branch cursor/public-repo-viewer-f77d). Behaviour below is that diff:
 // worker/viewer/{url,fetchguard,route,session,packmap,html,escape,limits,traceview}.ts
 // and test/viewer.test.ts. The 438 / 443 / 505 ms bars and the 29 ms / 1,555 ms
@@ -50,8 +50,8 @@ const packBar = PACK.map(([id, off, len, label, color]) => {
   const x = +(packX0 + (off + len / 2) * packScale).toFixed(3);
   return { add: { id, kind: 'box' as const, label, at: [x, 2.2] as Vec, color, width, height: 0.58, fontSize: label ? 0.2 : 0.01 } };
 });
-const mapIds = [...PACK.map(([id]) => id), 'o0', 'o1', 'o2', 'o3', 'o4', 'o5', 'o6', 'o7', 'o8', 'o9', 'dbase'] as const;
-const renderIds = ['raw', 'esc', 'arrow2', 'msg', 'csp1', 'csp2', 'csp3'] as const;
+const mapIds = [...PACK.map(([id]) => id), 'legend', 'o0', 'o1', 'o2', 'o3', 'o4', 'o5', 'o6', 'o7', 'o8', 'o9', 'dbase'] as const;
+const renderIds = ['raw', 'esc', 'arrow2', 'msg', 'csp1', 'csp2', 'csp3', 'csp4'] as const;
 const traceIds = ['sum', 'b0', 'b1', 'b2', 'n0', 'n1', 'n2', 'cpu'] as const;
 const limitIds = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'rate', 'closed'] as const;
 const endIds = ['e0', 'e1', 'e2', 'e3', 'e4'] as const;
@@ -72,16 +72,17 @@ const steps: DocStep[] = [
   {
     name: 'url',
     meta: {
-      caption: 'Paste https://github.com/octocat/Hello-World.git. It redirects to this path, and the page does not ask for a token.',
+      caption: 'The box takes octocat/Hello-World, a URL, or git@host:path. owner/repo means GitHub. No token, and the allowlist still decides.',
       route: '/view/:host/:repo',
     },
     ops: [
       [
         ...drop('hint'),
-        line('paste', 'https://github.com/octocat/Hello-World.git', [0, -0.85], 'grey', 0.24),
+        line('paste', 'octocat/Hello-World', [0, -0.55], 'gold', 0.28),
+        line('forms', 'URL · github.com/owner/repo · git@host:path', [0, -1.4], 'grey', 0.22),
         { indicate: 'url', color: 'teal' },
         { set: { host: 'github.com' } },
-        note('landing input → this path · no token'),
+        note('owner/repo means GitHub · no token'),
       ],
     ],
   },
@@ -94,7 +95,7 @@ const steps: DocStep[] = [
     },
     ops: [
       [
-        ...drop('paste'),
+        ...drop('paste', 'forms'),
         { move: { id: 'url', at: [0, 2.62] } },
         chip('gh', 'github.com', [-5, 1.4], 'green', 0.2, 0.52),
         chip('gl', 'gitlab.com', [-2.5, 1.4], 'teal', 0.2, 0.52),
@@ -190,7 +191,7 @@ const steps: DocStep[] = [
   {
     name: 'map',
     meta: {
-      caption: 'The bar is the test fixture, sized by bytes. The ref-delta at 383 is the commit at 12, depth 1. A chain past 32 fails closed.',
+      caption: 'Each segment has a tooltip, and a click jumps to that row. The ref-delta at 383 is the commit at 12, depth 1.',
       bytes: 930,
       objects: 9,
       refDelta: 1,
@@ -199,17 +200,18 @@ const steps: DocStep[] = [
       [
         ...drop(...packIds),
         ...packBar,
-        line('o0', '@12  commit  371 B', [-3.5, 1.15], 'blue', 0.2),
-        line('o1', '@383  ref-delta  183 B', [-3.5, 0.72], 'red', 0.2),
-        line('o2', '@566  tree  108 B', [-3.5, 0.29], 'green', 0.2),
-        line('o3', '@674  blob  15 B', [-3.5, -0.14], 'grey', 0.2),
-        line('o4', '@689  blob  27 B', [-3.5, -0.57], 'grey', 0.2),
-        line('o5', '@716  tree  43 B', [2.9, 1.15], 'green', 0.2),
-        line('o6', '@759  blob  16 B', [2.9, 0.72], 'grey', 0.2),
-        line('o7', '@775  tree  108 B', [2.9, 0.29], 'green', 0.2),
-        line('o8', '@883  blob  27 B', [2.9, -0.14], 'grey', 0.2),
-        line('o9', '@910  trailer  20 B', [2.9, -0.57], 'white', 0.2),
-        line('dbase', 'ref-delta @383 → commit @12 · depth 1', [0, -1.45], 'red', 0.24),
+        line('legend', 'header · commit · tree · blob · tag · ofs delta · ref delta · trailer', [0, 1.52], 'grey', 0.16),
+        line('o0', '@12  commit  371 B', [-3.5, 0.95], 'blue', 0.2),
+        line('o1', '@383  ref-delta  183 B', [-3.5, 0.52], 'red', 0.2),
+        line('o2', '@566  tree  108 B', [-3.5, 0.09], 'green', 0.2),
+        line('o3', '@674  blob  15 B', [-3.5, -0.34], 'grey', 0.2),
+        line('o4', '@689  blob  27 B', [-3.5, -0.77], 'grey', 0.2),
+        line('o5', '@716  tree  43 B', [2.9, 0.95], 'green', 0.2),
+        line('o6', '@759  blob  16 B', [2.9, 0.52], 'grey', 0.2),
+        line('o7', '@775  tree  108 B', [2.9, 0.09], 'green', 0.2),
+        line('o8', '@883  blob  27 B', [2.9, -0.34], 'grey', 0.2),
+        line('o9', '@910  trailer  20 B', [2.9, -0.77], 'white', 0.2),
+        line('dbase', 'ref-delta @383 → commit @12 · depth 1', [0, -1.6], 'red', 0.22),
         { set: { objects: 9 } },
         note('930 B · trailer a470ee96 · widths follow the bytes'),
       ],
@@ -218,7 +220,7 @@ const steps: DocStep[] = [
   {
     name: 'render',
     meta: {
-      caption: 'The name and the message are escaped, so they stay text. No script is allowed, and raw mode is not a page.',
+      caption: 'Names stay text. script-src is one sha256. That script only highlights a line or a pack row, and copies a permalink.',
     },
     ops: [
       [
@@ -227,24 +229,25 @@ const steps: DocStep[] = [
         line('arrow2', '→', [0, 1.15], 'grey', 0.36),
         chip('esc', '&lt;script&gt;.txt', [3.15, 1.15], 'green', 0.24),
         line('msg', '&lt;script&gt;alert(1)&lt;/script&gt;', [0, 0.05], 'grey', 0.24),
-        line('csp1', "default-src 'none'; style-src 'self'; script-src 'none'", [0, -0.75], 'teal', 0.2),
-        line('csp2', "img-src 'none'; connect-src 'none'; frame-ancestors 'none'", [0, -1.3], 'teal', 0.2),
-        line('csp3', "base-uri 'none'; form-action 'self'", [0, -1.85], 'teal', 0.2),
-        note('escaped · CSP · raw=1 is not a page'),
+        line('csp1', "default-src 'none'; style-src 'self'", [0, -0.7], 'teal', 0.2),
+        line('csp2', "script-src 'sha256-3FejXQGeGPnTxIrm9basdz7OIIAsmgSP0IF+nvjOJ3I='", [0, -1.2], 'teal', 0.16),
+        line('csp3', "img-src 'none'; connect-src 'none'; base-uri 'none'", [0, -1.7], 'teal', 0.18),
+        line('csp4', "form-action 'self'; frame-ancestors 'none'", [0, -2.2], 'teal', 0.18),
+        note('escaped · one hashed script · raw=1 is not a page'),
       ],
     ],
   },
   {
     name: 'trace',
     meta: {
-      caption: 'The page draws one bar per call, to scale, with status, bytes, and cache. This one was serial, so the client waited 1,555 ms.',
+      caption: 'The trace starts open, under a pill of calls, time, and retries. Bars are to scale. This read was serial.',
       cpuMs: 29,
       clientMs: 1555,
     },
     ops: [
       [
         ...drop(...renderIds),
-        line('sum', '1,386 ms of git round trips', [0, 2.7], 'grey', 0.22),
+        chip('sum', '3 upstream calls · 1.4 s · 1 retry', [0, 2.72], 'grey', 0.2, 0.48),
         line('n0', 'ls-refs', [bLs.at[0], 1.95], 'blue', 0.24),
         { add: { id: 'b0', kind: 'box', label: '438 ms', at: [bLs.at[0], 1.35], color: 'blue', fontSize: 0.22, height: 0.48, width: bLs.width } },
         line('n1', 'fetch tree:0', [bTree.at[0], 0.95], 'red', 0.24),
@@ -285,7 +288,7 @@ const steps: DocStep[] = [
   {
     name: 'end',
     meta: {
-      caption: 'Exact host, no credential, then the git calls. The page shows the tree, the pack map, and the trace. /v1 is unchanged.',
+      caption: 'The page is a tree with a branch switcher, a pack map, and a trace you can fold. Colors follow the system. /v1 is unchanged.',
     },
     ops: [
       [
@@ -296,7 +299,7 @@ const steps: DocStep[] = [
         chip('e3', 'pack map', [2.4, 0.35], 'gold', 0.22),
         chip('e4', 'trace', [4.8, 0.35], 'blue', 0.22),
         { set: { v1: 'unchanged' } },
-        note('/v1 unchanged · tree, pack map, and the trace'),
+        note('/v1 unchanged · folds · system theme'),
       ],
     ],
   },
