@@ -52,7 +52,7 @@ const packBar = PACK.map(([id, off, len, label, color]) => {
 });
 const mapIds = [...PACK.map(([id]) => id), 'o0', 'o1', 'o2', 'o3', 'o4', 'o5', 'o6', 'o7', 'o8', 'o9', 'dbase'] as const;
 const renderIds = ['raw', 'esc', 'arrow2', 'msg', 'csp1', 'csp2', 'csp3'] as const;
-const traceIds = ['b0', 'b1', 'b2', 'n0', 'n1', 'n2', 'cpu'] as const;
+const traceIds = ['sum', 'b0', 'b1', 'b2', 'n0', 'n1', 'n2', 'cpu'] as const;
 const limitIds = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'rate', 'closed'] as const;
 const endIds = ['e0', 'e1', 'e2', 'e3', 'e4'] as const;
 
@@ -72,23 +72,29 @@ const steps: DocStep[] = [
   {
     name: 'url',
     meta: {
-      caption: 'GET /view/github.com/octocat/Hello-World is a public page. No PLY_TOKEN. A pasted https remote redirects to that path.',
+      caption: 'Paste https://github.com/octocat/Hello-World.git. It redirects to this path, and the page does not ask for a token.',
       route: '/view/:host/:repo',
     },
     ops: [
-      [{ indicate: 'url', color: 'teal' }, { set: { host: 'github.com' } }, note('public page · no token')],
+      [
+        ...drop('hint'),
+        line('paste', 'https://github.com/octocat/Hello-World.git', [0, -0.85], 'grey', 0.24),
+        { indicate: 'url', color: 'teal' },
+        { set: { host: 'github.com' } },
+        note('landing input → this path · no token'),
+      ],
     ],
   },
   {
     name: 'allowlist',
     meta: {
-      caption: 'The host must match exactly: github.com, gitlab.com, codeberg.org, bitbucket.org, or git.sr.ht. VIEWER_EXTRA_HOSTS is off, so nothing else matches. Userinfo, a port, a trailing dot, and a lookalike are rejected before any fetch. A redirect to another host is not followed.',
+      caption: 'Only an exact hostname is fetched. Extra hosts are off. Userinfo, a port, a trailing dot, a lookalike, or another host stops before any request.',
       host: 'github.com',
       match: 'exact',
     },
     ops: [
       [
-        ...drop('hint'),
+        ...drop('paste'),
         { move: { id: 'url', at: [0, 2.62] } },
         chip('gh', 'github.com', [-5, 1.4], 'green', 0.2, 0.52),
         chip('gl', 'gitlab.com', [-2.5, 1.4], 'teal', 0.2, 0.52),
@@ -112,7 +118,7 @@ const steps: DocStep[] = [
   {
     name: 'strip',
     meta: {
-      caption: 'Authorization, Cookie, Git-Token, and Git-Authorization are dropped. User-Agent becomes ply-viewer/0.1.0. The secret in a rejected URL is not echoed.',
+      caption: 'Those four are dropped. User-Agent becomes ply-viewer/0.1.0. A secret in a rejected URL is not echoed.',
       credential: 'absent',
     },
     ops: [
@@ -131,7 +137,7 @@ const steps: DocStep[] = [
   {
     name: 'ls-refs',
     meta: {
-      caption: 'On a tree page, discover runs first, then ls-refs for HEAD and refs/heads. Quirks stay on this request, so a filter refusal is not hidden by /v1.',
+      caption: 'Discover, then HEAD and refs/heads. Quirks stay on this request, so a filter refusal stays visible. /v1 would hide it after the first time.',
       command: 'ls-refs',
     },
     ops: [
@@ -147,7 +153,7 @@ const steps: DocStep[] = [
   {
     name: 'fetch',
     meta: {
-      caption: 'The commit fetch asks for filter tree:0. If that answer says only blob:none is supported, this request retries once. Both calls stay in the trace.',
+      caption: 'The commit asks for tree:0. If the server only allows blob:none, this request retries once. Both calls stay in the trace.',
       requested: 'tree:0',
       http: 400,
       retry: 'blob:none',
@@ -168,7 +174,7 @@ const steps: DocStep[] = [
   {
     name: 'pack',
     meta: {
-      caption: 'A version-2 pack is a 12-byte header, the objects, and a 20-byte SHA-1 trailer. The client asks for ofs-delta, not a thin pack.',
+      caption: 'Twelve bytes, the objects, twenty bytes of SHA-1. The client asks for ofs-delta and does not ask for a thin pack.',
     },
     ops: [
       [
@@ -184,7 +190,7 @@ const steps: DocStep[] = [
   {
     name: 'map',
     meta: {
-      caption: 'The bar is the test fixture, sized by bytes and colored by wire type. The ref-delta at offset 383 points at the commit at 12, depth 1. A chain past 32 fails closed.',
+      caption: 'The bar is the test fixture, sized by bytes. The ref-delta at 383 is the commit at 12, depth 1. A chain past 32 fails closed.',
       bytes: 930,
       objects: 9,
       refDelta: 1,
@@ -212,7 +218,7 @@ const steps: DocStep[] = [
   {
     name: 'render',
     meta: {
-      caption: 'Text is escaped, so <script>.txt stays text. The Content-Security-Policy allows no script and only /view.css. Raw mode is not HTML.',
+      caption: 'The name and the message are escaped, so they stay text. No script is allowed, and raw mode is not a page.',
     },
     ops: [
       [
@@ -231,13 +237,14 @@ const steps: DocStep[] = [
   {
     name: 'trace',
     meta: {
-      caption: 'One bar per upload-pack span, with status, bytes, and cache. This slow read was serial: ls-refs 438 ms, tree:0 443 ms at HTTP 400, blob:none 505 ms. CPU 29 ms. The client waited 1,555 ms.',
+      caption: 'The page draws one bar per call, to scale, with status, bytes, and cache. This one was serial, so the client waited 1,555 ms.',
       cpuMs: 29,
       clientMs: 1555,
     },
     ops: [
       [
         ...drop(...renderIds),
+        line('sum', '1,386 ms of git round trips', [0, 2.7], 'grey', 0.22),
         line('n0', 'ls-refs', [bLs.at[0], 1.95], 'blue', 0.24),
         { add: { id: 'b0', kind: 'box', label: '438 ms', at: [bLs.at[0], 1.35], color: 'blue', fontSize: 0.22, height: 0.48, width: bLs.width } },
         line('n1', 'fetch tree:0', [bTree.at[0], 0.95], 'red', 0.24),
@@ -253,7 +260,7 @@ const steps: DocStep[] = [
   {
     name: 'limits',
     meta: {
-      caption: '4 MiB upstream, 2 MiB packs, 400 objects, 256 KiB files, depth 32, 16 calls, 12 seconds each, 20 seconds a page. Errors keep the trace. ViewerRateLimit, a Durable Object, allows 60 page requests and 20 pack requests a minute. If it is missing, the page is a 503.',
+      caption: 'Past a cap, the page stops and keeps the trace. ViewerRateLimit counts the client by a hash, not by storing the address. If it is missing, the answer is 503 before any fetch.',
       upstream: '4MiB',
       calls: 16,
     },
@@ -278,16 +285,16 @@ const steps: DocStep[] = [
   {
     name: 'end',
     meta: {
-      caption: 'Exact host, no credential, then discover, ls-refs, and fetch. /v1 is unchanged. The page shows the tree, the pack map, and that trace.',
+      caption: 'Exact host, no credential, then the git calls. The page shows the tree, the pack map, and the trace. /v1 is unchanged.',
     },
     ops: [
       [
         ...drop(...limitIds),
-        chip('e0', 'host', [-4.8, 0.35], 'green', 0.24),
-        chip('e1', 'strip', [-2.4, 0.35], 'red', 0.24),
-        chip('e2', 'discover', [0, 0.35], 'blue', 0.24),
-        chip('e3', 'fetch', [2.4, 0.35], 'gold', 0.24),
-        chip('e4', 'page', [4.8, 0.35], 'teal', 0.24),
+        chip('e0', 'exact host', [-4.8, 0.35], 'green', 0.22),
+        chip('e1', 'no credential', [-2.4, 0.35], 'red', 0.22),
+        chip('e2', 'tree', [0, 0.35], 'teal', 0.22),
+        chip('e3', 'pack map', [2.4, 0.35], 'gold', 0.22),
+        chip('e4', 'trace', [4.8, 0.35], 'blue', 0.22),
         { set: { v1: 'unchanged' } },
         note('/v1 unchanged · tree, pack map, and the trace'),
       ],
