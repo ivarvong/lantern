@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, DOWN, PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_TYPE_MAX, PHONE_PAD, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX } from '../src/index.ts';
+import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, DOWN, PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_TYPE_MAX, PHONE_PAD, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX, PHONE_ANCHOR } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -234,7 +234,8 @@ test('portrait type scale, padding, band gap and connector length are named', ()
   assert.equal(PHONE_TYPE_MAX, 24 * (16 / 390));
   assert.equal(PHONE_PAD, 8 * (16 / 390));
   assert.equal(PHONE_BAND_GAP, 48 * (16 / 390));
-  assert.equal(PHONE_CONNECTOR_MAX, 16);
+  assert.equal(PHONE_CONNECTOR_MAX, 24);
+  assert.equal(PHONE_ANCHOR, 12 * (16 / 390));
 });
 
 test('portrait scale fails on type past the max and on a stretched box', async () => {
@@ -279,6 +280,35 @@ test('portrait scale fails on type past the max and on a stretched box', async (
     await s.wait(0.45);
   });
   assert.ok(!wide.includes('scale'), `16:9 camera is not the phone canvas, got ${wide}`);
+});
+
+test('a connector that starts in the gap fails anchor; one that leaves the token does not', async () => {
+  const detached = await run(async (s) => {
+    const token = new Text('github.com', { font: 'mono', fontSize: 0.5 }).moveTo([0, 3]);
+    const chip = new Rectangle({ width: 3, height: 1, fill: '#5cd0b3', stroke: '#5cd0b3' }).moveTo([0, -1]);
+    const wire = new Line([0, 0.4], [0, -0.5], { stroke: '#ffffff', strokeWidth: 0.04 });
+    const g = new Group(wire);
+    g.anchorFrom = token;
+    g.anchorTo = chip;
+    s.add(token, chip, g);
+    await s.play(new FadeIn(token), new FadeIn(chip), new Create(wire), { runTime: 0.25 });
+    await s.wait(0.4);
+  });
+  assert.ok(detached.includes('anchor'), `a line that begins in empty space should fail, got ${detached}`);
+  const attached = await run(async (s) => {
+    const token = new Text('github.com', { font: 'mono', fontSize: 0.5 }).moveTo([0, 3]);
+    const chip = new Rectangle({ width: 3, height: 1, fill: '#5cd0b3', stroke: '#5cd0b3' }).moveTo([0, -1]);
+    const tb = token.box()!;
+    const cb = chip.box()!;
+    const wire = new Line([(tb[0] + tb[2]) / 2, tb[1]], [(cb[0] + cb[2]) / 2, cb[3]], { stroke: '#ffffff', strokeWidth: 0.04 });
+    const g = new Group(wire);
+    g.anchorFrom = token;
+    g.anchorTo = chip;
+    s.add(token, chip, g);
+    await s.play(new FadeIn(token), new FadeIn(chip), new Create(wire), { runTime: 0.25 });
+    await s.wait(0.4);
+  });
+  assert.ok(!attached.includes('anchor'), `a line from the token to the chip should pass, got ${attached}`);
 });
 
 test('a measures bar may be wide; void is only inside a group; a long connector is span', async () => {

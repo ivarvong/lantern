@@ -50,5 +50,5 @@ export type { Trace, StepRecord } from './trace.ts';
 
 // Diagnostics
 export { perf } from './perf.ts';
-export { MotionSink, analyzeMotion, summarizeMotion, PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_TYPE_MAX, PHONE_PAD, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX } from './verify.ts';
+export { MotionSink, analyzeMotion, summarizeMotion, PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_TYPE_MAX, PHONE_PAD, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX, PHONE_ANCHOR } from './verify.ts';
 export type { MotionEvent, MotionOptions, MotionSummary } from './verify.ts';

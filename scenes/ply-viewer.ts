@@ -16,12 +16,13 @@
 //   commit / offset = blue,  ref-delta = red,  credential = orange,
 //   blob bytes = grey,  pkt length / span = gold,  HTTP 400 = red.
 import {
-  Scene, Group, Text, Rectangle, Line, CurvedArrow, FadeIn, FadeOut, Create, Transform, LaggedStart,
+  Scene, Group, Text, Rectangle, Line, Arc, CurvedArrow, FadeIn, FadeOut, Create, Transform, LaggedStart,
   LEFT, RIGHT, DOWN, UL,
   PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_PAD, PHONE_CONNECTOR_MAX,
   BLUE, TEAL, GREEN, RED, GREY, WHITE, ORANGE, GOLD,
 } from '../src/index.ts';
-import type { Sink, SceneOptions, Mobject } from '../src/index.ts';
+import type { Sink, SceneOptions, Mobject, Box } from '../src/index.ts';
+import { segmentBlocked } from '../src/layout.ts';
 import { PACK_BYTES, PACK_COMMIT_OID, PACK_HEADER, PACK_OBJECTS, PACK_TRAILER, wireName } from './lib/small-pack.ts';
 import type { PackWire, PackWireObject } from './lib/small-pack.ts';
 
@@ -371,70 +372,134 @@ export class PlyViewerScene extends Scene {
       await this.play(...gone.map((l) => new FadeOut(l)), { runTime: 0.2 });
       wires.remove(...gone);
     };
-    const hits = (x: number, y0: number, y1: number, target: Mobject): boolean => {
-      const lo = Math.min(y0, y1), hi = Math.max(y0, y1);
-      const own = new Set(target.family());
-      for (const m of graphic.family()) {
-        if (!(m instanceof Rectangle) || own.has(m)) continue;
-        if ((m.style.opacity ?? 1) < 0.5) continue;
-        const b = m.box();
-        if (!b) continue;
-        if (x <= b[0] + 0.05 || x >= b[2] - 0.05) continue;
-        if (Math.min(b[3], hi) - Math.max(b[1], lo) > 0.05) return true;
-      }
-      return false;
-    };
+    // Just outside a box, about 2px at 390 wide: on the edge, not in the gap.
+    const OUT = 0.1;
     const link = async (token: Text, target: Mobject, color: string, at?: number): Promise<void> => {
       const mark = token.box();
-      const host = code?.box() ?? null;
       const tb = target.box();
-      const pb = graphic.box();
-      if (!mark || !host || !tb || !pb) throw new Error('connector is missing a box');
-      const xTok = Math.min(host[2] - 0.15, Math.max(host[0] + 0.15, (mark[0] + mark[2]) / 2));
-      const gapTop = host[1];
-      const gapBot = pb[3];
-      const yRail = gapBot < gapTop - 0.12 ? (gapTop + gapBot) / 2 : gapTop - 0.16;
-      const xMid = Math.min(tb[2] - 0.22, Math.max(tb[0] + 0.22, at ?? (tb[0] + tb[2]) / 2));
-      const xDrop = at == null && xTok > tb[0] + 0.2 && xTok < tb[2] - 0.2 ? xTok : xMid;
-      const yTop = tb[3] + 0.06;
-      const pts: Array<[number, number]> = [];
-      if (!hits(xDrop, yRail, yTop, target)) {
-        pts.push([xTok, yRail]);
-        if (Math.abs(xDrop - xTok) > 0.08) pts.push([xDrop, yRail]);
-        pts.push([xDrop, yTop]);
-      } else {
-        const yRow = (tb[1] + tb[3]) / 2;
-        const sides = [
-          { gutter: Math.max(pb[0] - 0.35, -7.85), xEnter: tb[0] },
-          { gutter: Math.min(pb[2] + 0.35, 7.85), xEnter: tb[2] },
-        ];
-        let best: Array<[number, number]> | null = null;
-        let bestLen = Infinity;
-        for (const side of sides) {
-          if (hits(side.gutter, yRail, yRow, target)) continue;
-          const path: Array<[number, number]> = [[xTok, yRail], [side.gutter, yRail], [side.gutter, yRow], [side.xEnter, yRow]];
-          let along = 0;
-          for (let i = 0; i < path.length - 1; i++) {
-            const p = path[i]!, q = path[i + 1]!;
-            along += Math.hypot(q[0] - p[0], q[1] - p[1]);
-          }
-          if (along < bestLen) { bestLen = along; best = path; }
-        }
-        if (!best) throw new Error(`no clear side for ${JSON.stringify(token.text)}`);
-        pts.push(...best);
+      const codeBox = code?.box() ?? null;
+      if (!mark || !tb) throw new Error('connector is missing a box');
+      // Bottom-center of the wrapped token, not the pre-wrap line and not the gap below the code.
+      const start: [number, number] = [(mark[0] + mark[2]) / 2, mark[1] - OUT];
+      const own = new Set(target.family());
+      const chipBoxes: Box[] = [];
+      const arcBoxes: Box[] = [];
+      const textBoxes: Box[] = [];
+      const insideTarget = (b: Box): boolean =>
+        b[0] >= tb[0] - 0.04 && b[2] <= tb[2] + 0.04 && b[1] >= tb[1] - 0.04 && b[3] <= tb[3] + 0.04;
+      const take = (m: Mobject): void => {
+        if (own.has(m) || m === token) return;
+        const b = m.box();
+        if (!b || insideTarget(b)) return;
+        if (m instanceof Rectangle) {
+          const fill = m.style.fill !== 'none' ? (m.style.fillOpacity ?? 1) : 0;
+          const stroke = m.style.stroke !== 'none' ? (m.style.strokeOpacity ?? 1) : 0;
+          // A faint card frame is a border the line may cross to reach the row inside it.
+          if (fill < 0.12 && stroke < 0.85) return;
+          chipBoxes.push(b);
+        } else if (m instanceof Text) textBoxes.push(b);
+        else if (m instanceof Arc) arcBoxes.push(b);
+      };
+      for (const m of graphic.family()) take(m);
+      for (const m of data.family()) if (m instanceof Rectangle) {
+        const b = m.box();
+        if (b) chipBoxes.push(b);
       }
+      if (code) for (const m of code.family()) if (m instanceof Text && m !== token) take(m);
+      const fits = (pts: Array<[number, number]>): boolean => {
+        const last = pts.length - 2;
+        for (let i = 0; i <= last; i++) {
+          const a = pts[i]!, b = pts[i + 1]!;
+          if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.02) continue;
+          const pad0 = i === 0 ? 0.22 : 0;
+          const pad1 = i === last ? 0.22 : 0;
+          for (const box of chipBoxes) if (segmentBlocked(a, b, box, 0.28, pad0, pad1)) return false;
+          for (const box of arcBoxes) if (segmentBlocked(a, b, box, 0.08, pad0, pad1)) return false;
+          for (const box of textBoxes) if (segmentBlocked(a, b, box, 0.05, pad0, pad1)) return false;
+          if (segmentBlocked(a, b, tb, 0, pad0, pad1)) return false;
+          if (segmentBlocked(a, b, mark, 0.04, pad0, pad1)) return false;
+        }
+        return true;
+      };
+      const onScreen = (pts: Array<[number, number]>): boolean =>
+        pts.every((p) => Math.abs(p[0]) <= 7.85 && Math.abs(p[1]) <= cam.h / 2 - 0.05);
+      const along = (pts: Array<[number, number]>): number => {
+        let n = 0;
+        for (let i = 0; i < pts.length - 1; i++) n += Math.hypot(pts[i + 1]![0] - pts[i]![0], pts[i + 1]![1] - pts[i]![1]);
+        return n;
+      };
+      // x on the target's top that a vertical drop can reach without meeting a chip above it.
+      let spans: Array<[number, number]> = [[tb[0] + 0.2, tb[2] - 0.2]];
+      for (const box of chipBoxes) {
+        if (box[1] < tb[3] - 0.05) continue;
+        const next: Array<[number, number]> = [];
+        for (const [lo, hi] of spans) {
+          const x0 = box[0] - 0.28, x1 = box[2] + 0.28;
+          if (x1 <= lo || x0 >= hi) { next.push([lo, hi]); continue; }
+          if (x0 > lo) next.push([lo, x0]);
+          if (x1 < hi) next.push([x1, hi]);
+        }
+        spans = next.filter(([lo, hi]) => hi - lo > 0.12);
+      }
+      const prefer = at ?? start[0];
+      let landX: number | null = null;
+      const yLand = tb[3] + OUT;
+      for (const [lo, hi] of spans) {
+        const inset = hi - lo > 0.2 ? 0.08 : 0;
+        const x = Math.min(hi - inset, Math.max(lo + inset, prefer));
+        if (x < lo || x > hi) continue;
+        if (landX == null || Math.abs(x - prefer) < Math.abs(landX - prefer)) landX = x;
+      }
+      const yFree = codeBox ? Math.min(start[1] - 0.05, codeBox[1] - 0.16) : start[1] - 0.3;
+      const candidates: Array<Array<[number, number]>> = [];
+      if (landX != null) {
+        const end: [number, number] = [landX, yLand];
+        if (Math.abs(start[0] - landX) < 0.04) candidates.push([start, end]);
+        // Jog across in the gap under the token, then drop. Lower lines sit below that gap.
+        candidates.push([start, [landX, start[1]], end]);
+        candidates.push([start, [start[0], yFree], [landX, yFree], end]);
+        if (codeBox) {
+          candidates.push([start, [codeBox[0] - 0.3, start[1]], [codeBox[0] - 0.3, yFree], [landX, yFree], end]);
+          candidates.push([start, [codeBox[2] + 0.3, start[1]], [codeBox[2] + 0.3, yFree], [landX, yFree], end]);
+        }
+      }
+      // No clear top: come in from the left of the column, then the right.
+      const yRow = (tb[1] + tb[3]) / 2;
+      const pb = graphic.box();
+      const gutters: number[] = [];
+      if (pb) gutters.push(pb[0] - 0.55, pb[2] + 0.55);
+      if (codeBox) gutters.push(codeBox[0] - 0.4, codeBox[2] + 0.4);
+      if (!gutters.length) gutters.push(-7.4, 7.4);
+      for (const gutter of gutters) {
+        const g = Math.max(-7.7, Math.min(7.7, gutter));
+        const end: [number, number] = g < (tb[0] + tb[2]) / 2 ? [tb[0] - OUT, yRow] : [tb[2] + OUT, yRow];
+        // Across under the token, then down the side. The next code line is below this y.
+        candidates.push([start, [g, start[1]], [g, yRow], end]);
+        candidates.push([start, [start[0], yFree], [g, yFree], [g, yRow], end]);
+        if (codeBox) {
+          const escape = g < start[0] ? codeBox[0] - 0.3 : codeBox[2] + 0.3;
+          candidates.push([start, [escape, start[1]], [escape, yFree], [g, yFree], [g, yRow], end]);
+        }
+      }
+      let best: Array<[number, number]> | null = null;
+      let bestLen = Infinity;
+      for (const pts of candidates) {
+        if (!onScreen(pts) || !fits(pts)) continue;
+        const len = along(pts);
+        if (len < bestLen) { best = pts; bestLen = len; }
+      }
+      if (!best) throw new Error(`no anchored route from ${JSON.stringify(token.text)}`);
+      if (bestLen > PHONE_CONNECTOR_MAX) throw new Error(`connector ${bestLen.toFixed(2)} from ${JSON.stringify(token.text)}`);
       const lines: Line[] = [];
-      let len = 0;
-      for (let i = 0; i < pts.length - 1; i++) {
-        const p = pts[i]!, q = pts[i + 1]!;
-        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-        if (d < 0.02) continue;
-        len += d;
+      for (let i = 0; i < best.length - 1; i++) {
+        const p = best[i]!, q = best[i + 1]!;
+        if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 0.02) continue;
         lines.push(new Line(p, q, { stroke: color, strokeWidth: 0.045 }));
       }
-      if (len > PHONE_CONNECTOR_MAX) throw new Error(`connector ${len.toFixed(2)} from ${JSON.stringify(token.text)}`);
-      if (!lines.length) return;
+      if (!lines.length) throw new Error(`empty connector from ${JSON.stringify(token.text)}`);
       const path = new Group(...lines);
+      path.anchorFrom = token;
+      path.anchorTo = target;
       wires.add(path);
       await this.play(new Create(path, { lagRatio: 0 }), { runTime: 0.35 });
     };
@@ -529,9 +594,10 @@ export class PlyViewerScene extends Scene {
     data.add(remote);
     await this.play(new FadeIn(remote), { runTime: 0.25 });
     const urlHost = chip([[{ text: 'github.com', color: WHITE }]], TEAL);
+    // The path, in the order the URL reads: /view/github.com/octocat/Hello-World.
     const urlPicture = pile([
-      urlHost,
       chip([[{ text: '/view/', color: GOLD }]], GOLD),
+      urlHost,
       chip([[{ text: 'octocat', color: INK }]], DIM),
       chip([[{ text: 'Hello-World', color: INK }]], DIM),
     ]);

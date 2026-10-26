@@ -25,6 +25,8 @@
 //              than PHONE_BAND_GAP. The margin around a group is not a void.
 //              Connector strokes do not fill a band.
 //   span       a portrait connector is longer than PHONE_CONNECTOR_MAX
+//   anchor     a connector's start is farther than PHONE_ANCHOR from its source
+//              token, or its end is farther than that from its target
 //   overlap    two settled shapes occupy the same space, and neither declares it
 //   margin     two settled texts are closer than the minimum gap
 //   intrude    a moving text that belongs to no box crosses a label inside one
@@ -56,7 +58,7 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'scale' | 'void' | 'span' | 'overlap' | 'margin' | 'intrude' | 'clip';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'scale' | 'void' | 'span' | 'anchor' | 'overlap' | 'margin' | 'intrude' | 'clip';
 
 /** The phone frame is 16 scene units across 390 CSS pixels. */
 const PHONE_PX = 390 / 16;
@@ -92,12 +94,19 @@ export const PHONE_PAD = 8 / PHONE_PX;
 export const PHONE_BAND_GAP = 48 / PHONE_PX;
 
 /**
- * Longest connector on a portrait camera, in scene units. A drop from the code
- * band onto a picture centered below it fits; a line down the whole phone does
- * not. 16 units is about 390px at 390 wide: a drop from the code band down the
- * side of a centered picture, not a line the height of the phone.
+ * Longest connector on a portrait camera, in scene units. The line starts at
+ * the highlighted token, so it includes the drop from that glyph to a chip
+ * in the centered picture and a short jog around the code under the token.
+ * 24 units is about 585px at 390 wide. A line down the whole phone is longer.
  */
-export const PHONE_CONNECTOR_MAX = 16;
+export const PHONE_CONNECTOR_MAX = 24;
+
+/**
+ * How far a connector's end may sit from the box it claims, in scene units.
+ * 12px at 390 wide. The start belongs on the source token and the end on the
+ * target; a line that begins in the gap between them fails.
+ */
+export const PHONE_ANCHOR = 12 / PHONE_PX;
 
 /** A one-frame gap between animations is not a picture. A held sparse frame is. */
 const CANVAS_FILL_HOLD = 0.18;
@@ -305,6 +314,7 @@ export class MotionSink implements Sink {
     type RawSeg = { id: number; a: [number, number]; b: [number, number] };
     type ConnSeg = RawSeg & { pad0: number; pad1: number };
     const lineGroups = new Map<number, RawSeg[]>();
+    const lineParents = new Map<number, Mobject>();
     const arcGroups = new Map<number, RawSeg[]>();
     const arcBoxes: Array<{ id: number; box: Box }> = [];
     const segs: ConnSeg[] = [];
@@ -312,7 +322,8 @@ export class MotionSink implements Sink {
     const liveRects: Array<{ m: Rectangle; box: Box }> = [];
     const near = (p: [number, number], q: [number, number]): boolean => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.04;
     const connLens: Array<{ id: number; len: number }> = [];
-    const chain = (raw: RawSeg[]): ConnSeg[] => {
+    const anchoredEnds: Array<{ id: number; start: [number, number]; end: [number, number]; from: Mobject; to: Mobject }> = [];
+    const chain = (raw: RawSeg[], parent?: Mobject): ConnSeg[] => {
       const left = raw.map((s) => ({ ...s }));
       const chains: RawSeg[][] = [];
       while (left.length) {
@@ -346,7 +357,14 @@ export class MotionSink implements Sink {
           out.push({ ...s, pad0: i === 0 ? LAYOUT.endPad : 0, pad1: i === path.length - 1 ? LAYOUT.endPad : 0 });
         });
         const head = path[0];
+        const tail = path[path.length - 1];
         if (head) connLens.push({ id: head.id, len });
+        const from = parent?.anchorFrom ?? null;
+        const to = parent?.anchorTo ?? null;
+        const linesInGroup = parent ? parent.children.filter((c) => c instanceof Line).length : raw.length;
+        if (head && tail && from && to && raw.length === linesInGroup) {
+          anchoredEnds.push({ id: head.id, start: head.a, end: tail.b, from, to });
+        }
       }
       return out;
     };
@@ -359,6 +377,7 @@ export class MotionSink implements Sink {
           const list = lineGroups.get(key) ?? [];
           list.push({ id: m.id, a: m.start(), b: m.end() });
           lineGroups.set(key, list);
+          if (m.parent) lineParents.set(key, m.parent);
         }
       } else if (drawn && m instanceof Arc && !m.closed[0]) {
         const s = leaf(m);
@@ -388,7 +407,7 @@ export class MotionSink implements Sink {
       for (const c of m.children) walk(c);
     };
     for (const top of scene.mobjects) walk(top);
-    for (const raw of lineGroups.values()) segs.push(...chain(raw));
+    for (const [key, raw] of lineGroups) segs.push(...chain(raw, lineParents.get(key)));
     for (const raw of arcGroups.values()) segs.push(...chain(raw));
     const lineIds = new Set<number>();
     for (const list of lineGroups.values()) for (const s of list) lineIds.add(s.id);
@@ -451,6 +470,28 @@ export class MotionSink implements Sink {
         if (!segmentBlocked(seg.a, seg.b, arc.box, 0, seg.pad0, seg.pad1)) continue;
         note('pierce', `pierce:${seg.id}:a${arc.id}`, `Arc#${arc.id}`, 1, 'connector crosses this arc');
       }
+    }
+
+    const distToBox = (p: [number, number], b: Box): number => {
+      const x = Math.min(b[2], Math.max(b[0], p[0]));
+      const y = Math.min(b[3], Math.max(b[1], p[1]));
+      return Math.hypot(p[0] - x, p[1] - y);
+    };
+    for (const wire of anchoredEnds) {
+      const fromBox = wire.from.box();
+      const toBox = wire.to.box();
+      if (!fromBox || !toBox) continue;
+      const startFrom = distToBox(wire.start, fromBox);
+      const endTo = distToBox(wire.end, toBox);
+      const startTo = distToBox(wire.start, toBox);
+      const endFrom = distToBox(wire.end, fromBox);
+      const forward = startFrom <= PHONE_ANCHOR && endTo <= PHONE_ANCHOR;
+      const reverse = endFrom <= PHONE_ANCHOR && startTo <= PHONE_ANCHOR;
+      if (forward || reverse) continue;
+      const startGap = Math.min(startFrom, endFrom);
+      const endGap = Math.min(endTo, startTo);
+      const gap = Math.max(startGap, endGap);
+      note('anchor', `anchor:${wire.id}`, 'connector', +gap.toFixed(3), `connector ends sit ${startGap.toFixed(2)} and ${endGap.toFixed(2)} from the token and the datum; the limit is ${PHONE_ANCHOR.toFixed(2)}`);
     }
 
     for (const r of rects) {

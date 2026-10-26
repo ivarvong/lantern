@@ -108,6 +108,12 @@ export class Mobject {
    * does not treat it as a label that must hug its text.
    */
   measures = false;
+  /**
+   * The token this connector leaves, and the datum it arrives at. The anchor
+   * check requires the polyline's ends to sit on those two boxes.
+   */
+  anchorFrom: Mobject | null = null;
+  anchorTo: Mobject | null = null;
 
   constructor(style: Style = {}) {
     this.id = nextId++;

@@ -11,7 +11,11 @@
   A `measures` bar is exempt: its width encodes bytes or time. `void` fails on an
   empty band inside one layout group taller than `PHONE_BAND_GAP` (48px); the
   margin around the group is not a void. `span` fails when a connector is longer
-  than `PHONE_CONNECTOR_MAX` (16 scene units).
+  than `PHONE_CONNECTOR_MAX` (24 scene units; the line starts on the token).
+  `anchor` fails when a connector
+  that names its source and target (`anchorFrom`, `anchorTo`) starts farther
+  than `PHONE_ANCHOR` (12px at 390 wide) from that token, or ends farther than
+  that from its datum.
 - A scene can set `frame` to a camera other than 16:9. The player follows that aspect.
 - A connector that starts in the clearance beside a wrapped line can leave that gap
   instead of falling back to a straight cut through the line.
