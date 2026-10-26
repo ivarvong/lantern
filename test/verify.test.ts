@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, PHONE_CANVAS_FILL } from '../src/index.ts';
+import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, PHONE_CANVAS_FILL, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -228,11 +228,13 @@ test('stacked texts closer than the minimum gap are a margin error', async () =>
   assert.deepEqual(led, []);
 });
 
-test('PHONE_CANVAS_FILL is the portrait occupancy floor', () => {
-  assert.equal(PHONE_CANVAS_FILL, 0.6);
+test('portrait coverage, band gap and connector length are named', () => {
+  assert.equal(PHONE_CANVAS_FILL, 0.5);
+  assert.equal(PHONE_BAND_GAP, 48 * (16 / 390));
+  assert.equal(PHONE_CONNECTOR_MAX, 10);
 });
 
-test('a portrait frame fails fill when the picture stays in a short band', async () => {
+test('a portrait frame fails fill on area, and void on an empty band', async () => {
   const phone = { w: 16, h: 16 * (844 / 390) };
   const sparse = await run(async (s) => {
     s.frame = phone;
@@ -243,6 +245,8 @@ test('a portrait frame fails fill when the picture stays in a short band', async
     await s.wait(0.45);
   });
   assert.ok(sparse.includes('fill'), `expected canvas fill, got ${sparse}`);
+  assert.ok(sparse.includes('void'), `expected a void under the short band, got ${sparse}`);
+  // Top and bottom marks used to pass the old height check. The hole between them is the failure.
   const spread = await run(async (s) => {
     s.frame = phone;
     const a = new Text('code', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 1.6]);
@@ -251,14 +255,82 @@ test('a portrait frame fails fill when the picture stays in a short band', async
     await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.25 });
     await s.wait(0.45);
   });
-  assert.ok(!spread.includes('fill'), `portrait picture that spans the frame should pass, got ${spread}`);
+  assert.ok(spread.includes('fill'), `spread marks do not cover the canvas, got ${spread}`);
+  assert.ok(spread.includes('void'), `spread marks leave an empty band, got ${spread}`);
   const wide = await run(async (s) => {
     const a = new Text('only at the top', { fontSize: 0.5 }).moveTo([0, 3.2]);
     s.add(a);
     await s.play(new FadeIn(a), { runTime: 0.2 });
     await s.wait(0.45);
   });
-  assert.ok(!wide.includes('fill'), `16:9 camera is not the phone fill check, got ${wide}`);
+  assert.ok(!wide.includes('fill') && !wide.includes('void'), `16:9 camera is not the phone canvas, got ${wide}`);
+});
+
+test('portrait tiles that meet the edges pass fill and void; a long connector is span', async () => {
+  const phone = { w: 16, h: 16 * (844 / 390) };
+  const gap = PHONE_BAND_GAP * 0.4;
+  const packed = await run(async (s) => {
+    s.frame = phone;
+    const n = 8;
+    const top = phone.h / 2 - 0.3;
+    const bottom = -phone.h / 2 + 0.3;
+    const h = (top - bottom - gap * (n - 1)) / n;
+    const tiles: Rectangle[] = [];
+    let y = top;
+    for (let i = 0; i < n; i++) {
+      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
+      r.moveTo([0, y - h / 2]);
+      tiles.push(r);
+      y -= h + gap;
+    }
+    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
+    s.add(...tiles, label);
+    await s.play(new FadeIn(label), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    await s.wait(0.45);
+  });
+  assert.ok(!packed.includes('fill') && !packed.includes('void'), `a filled phone should pass, got ${packed}`);
+  const spanned = await run(async (s) => {
+    s.frame = phone;
+    const n = 8;
+    const top = phone.h / 2 - 0.3;
+    const bottom = -phone.h / 2 + 0.3;
+    const h = (top - bottom - gap * (n - 1)) / n;
+    const tiles: Rectangle[] = [];
+    let y = top;
+    for (let i = 0; i < n; i++) {
+      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
+      r.moveTo([0, y - h / 2]);
+      tiles.push(r);
+      y -= h + gap;
+    }
+    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
+    const wire = new Line([0, phone.h / 2 - 1], [0, -phone.h / 2 + 1], { stroke: '#ffffff', strokeWidth: 0.04 });
+    s.add(...tiles, label, wire);
+    await s.play(new FadeIn(label), new Create(wire), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    await s.wait(0.45);
+  });
+  assert.ok(spanned.includes('span'), `a full-height connector should fail, got ${spanned}`);
+  const local = await run(async (s) => {
+    s.frame = phone;
+    const n = 8;
+    const top = phone.h / 2 - 0.3;
+    const bottom = -phone.h / 2 + 0.3;
+    const h = (top - bottom - gap * (n - 1)) / n;
+    const tiles: Rectangle[] = [];
+    let y = top;
+    for (let i = 0; i < n; i++) {
+      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
+      r.moveTo([0, y - h / 2]);
+      tiles.push(r);
+      y -= h + gap;
+    }
+    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
+    const wire = new Line([0, top - 0.2], [1.2, top - 0.2], { stroke: '#ffffff', strokeWidth: 0.04 });
+    s.add(...tiles, label, wire);
+    await s.play(new FadeIn(label), new Create(wire), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    await s.wait(0.45);
+  });
+  assert.ok(!local.includes('span'), `a short connector should pass, got ${local}`);
 });
 
 test('settled text past the camera is clip', async () => {

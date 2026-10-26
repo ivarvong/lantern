@@ -41,10 +41,11 @@ button:focus-visible, select:focus-visible, .scrubber:focus-visible { outline: 2
 .stage-svg { aspect-ratio: 16 / 9; }
 /* A portrait scene is its own camera, not a 16:9 strip on a black page.
    Cap the column so the whole frame, including the trace at the bottom, stays
-   on screen above the transport. */
+   on screen above the caption and the transport. 268px is the header, the
+   caption, and the transport on a 390-wide phone. */
 .stage-svg.portrait {
   aspect-ratio: 390 / 844;
-  width: min(100%, 440px, calc((100dvh - 230px) * 390 / 844));
+  width: min(100%, 440px, calc((100dvh - 268px) * 390 / 844));
   margin-inline: auto;
 }
 .stage-svg svg { display: block; width: 100%; height: 100%; }

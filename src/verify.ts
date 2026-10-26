@@ -19,7 +19,11 @@
 //   pierce     a connector crosses a glyph run or a box edge away from its ends
 //   fill       a box's contents sit in one corner of it (the box was not sized to them),
 //              or a portrait camera's settled picture covers less than PHONE_CANVAS_FILL
-//              of the frame height (a phone canvas with the scene piled at the top)
+//              of the frame area. Coverage is the union of text and rectangle boxes,
+//              not the vertical distance between the top mark and the bottom one.
+//   void       a portrait camera has an empty horizontal band taller than PHONE_BAND_GAP
+//              (about 48px on a 390-wide phone). Connector strokes do not fill a band.
+//   span       a portrait connector is longer than PHONE_CONNECTOR_MAX
 //   overlap    two settled shapes occupy the same space, and neither declares it
 //   margin     two settled texts are closer than the minimum gap
 //   intrude    a moving text that belongs to no box crosses a label inside one
@@ -51,13 +55,27 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'overlap' | 'margin' | 'intrude' | 'clip';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'void' | 'span' | 'overlap' | 'margin' | 'intrude' | 'clip';
 
 /**
- * A portrait camera must keep its picture across this fraction of the frame
- * height. A phone canvas with the scene in the top quarter fails.
+ * A portrait camera's settled picture must cover this fraction of the frame
+ * area. The measure is the union of text and rectangle boxes, so pinning one
+ * mark at the top and another at the bottom does not count as coverage.
  */
-export const PHONE_CANVAS_FILL = 0.6;
+export const PHONE_CANVAS_FILL = 0.5;
+
+/**
+ * Tallest empty horizontal band a portrait camera may hold, in scene units.
+ * The phone frame is 16 units across 390px, so this is 48px.
+ */
+export const PHONE_BAND_GAP = 48 * (16 / 390);
+
+/**
+ * Longest connector on a portrait camera, in scene units. A short elbow between
+ * adjacent bands fits; a diagonal across an empty band does not. 10 units is
+ * about 244px at 390 wide.
+ */
+export const PHONE_CONNECTOR_MAX = 10;
 
 /** A one-frame gap between animations is not a picture. A held sparse frame is. */
 const CANVAS_FILL_HOLD = 0.18;
@@ -104,9 +122,13 @@ export class MotionSink implements Sink {
   private layoutSeen: Set<string>;
   /** When the current portrait picture first settled below PHONE_CANVAS_FILL. */
   private canvasLowSince: number | null;
+  /** When an empty band taller than PHONE_BAND_GAP first settled. */
+  private voidSince: number | null;
+  /** When a connector longer than PHONE_CONNECTOR_MAX first settled. */
+  private spanSince: number | null;
   constructor() {
     this.frames = []; this.labels = new Map(); this.layoutEvents = []; this.layoutSeen = new Set();
-    this.canvasLowSince = null;
+    this.canvasLowSince = null; this.voidSince = null; this.spanSince = null;
   }
   async frame(scene: Scene): Promise<void> {
     const f = new Map<number, LeafSample>();
@@ -267,6 +289,7 @@ export class MotionSink implements Sink {
     const rects: Array<{ m: Rectangle; box: Box }> = [];
     const liveRects: Array<{ m: Rectangle; box: Box }> = [];
     const near = (p: [number, number], q: [number, number]): boolean => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.04;
+    const connLens: Array<{ id: number; len: number }> = [];
     const chain = (raw: RawSeg[]): ConnSeg[] => {
       const left = raw.map((s) => ({ ...s }));
       const chains: RawSeg[][] = [];
@@ -295,9 +318,13 @@ export class MotionSink implements Sink {
       }
       const out: ConnSeg[] = [];
       for (const path of chains) {
+        let len = 0;
         path.forEach((s, i) => {
+          len += Math.hypot(s.b[0] - s.a[0], s.b[1] - s.a[1]);
           out.push({ ...s, pad0: i === 0 ? LAYOUT.endPad : 0, pad1: i === path.length - 1 ? LAYOUT.endPad : 0 });
         });
+        const head = path[0];
+        if (head) connLens.push({ id: head.id, len });
       }
       return out;
     };
@@ -530,7 +557,7 @@ export class MotionSink implements Sink {
     }
 
     // Portrait only. A 16:9 scene is a different camera; this is the phone canvas.
-    if (!(cam.h > cam.w)) { this.canvasLowSince = null; return; }
+    if (!(cam.h > cam.w)) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
     // Opacity, not fillOpacity: a card filled at a few percent is fully on screen.
     // A fade that has not landed — even a first frame at nearly zero — is the
     // picture still arriving, so a settled code line is not the whole frame.
@@ -551,26 +578,103 @@ export class MotionSink implements Sink {
       if (!unit && !flux) for (const c of m.children) watch(c);
     };
     for (const top of scene.mobjects) watch(top);
-    if (flux) { this.canvasLowSince = null; return; }
-    let minY = Infinity, maxY = -Infinity, nText = 0;
+    if (flux) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
+    // Connector strokes are not content: a diagonal across a hole must not hide it,
+    // and its bounding box must not count as coverage.
+    const boxes: Box[] = [];
+    const clipToFrame = (b: Box): Box | null => {
+      const x0 = Math.max(b[0], -hx), y0 = Math.max(b[1], -hy);
+      const x1 = Math.min(b[2], hx), y1 = Math.min(b[3], hy);
+      if (x1 - x0 < 1e-3 || y1 - y0 < 1e-3) return null;
+      return [x0, y0, x1, y1];
+    };
+    let nText = 0;
     for (const g of glyphRuns) {
       if (shown(g.m) < 0.85) continue;
-      minY = Math.min(minY, g.box[1]); maxY = Math.max(maxY, g.box[3]); nText++;
+      const c = clipToFrame(g.box);
+      if (c) { boxes.push(c); nText++; }
     }
     for (const r of rects) {
       if (area(r.box) < 0.08) continue;
-      minY = Math.min(minY, r.box[1]); maxY = Math.max(maxY, r.box[3]);
+      const c = clipToFrame(r.box);
+      if (c) boxes.push(c);
     }
-    if (nText < 1 || minY === Infinity) { this.canvasLowSince = null; return; }
-    const span = maxY - minY;
-    const need = PHONE_CANVAS_FILL * cam.h;
-    if (span + 1e-3 >= need) { this.canvasLowSince = null; return; }
-    if (this.canvasLowSince == null) this.canvasLowSince = t;
+    if (nText < 1) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
+    const covered = unionArea(boxes);
+    const frameArea = cam.w * cam.h;
+    const need = PHONE_CANVAS_FILL * frameArea;
+    if (covered + 1e-3 >= need) this.canvasLowSince = null;
+    else if (this.canvasLowSince == null) this.canvasLowSince = t;
     else if (t - this.canvasLowSince >= CANVAS_FILL_HOLD) {
-      const ratio = span / cam.h;
-      note('fill', 'fill:canvas', 'canvas', +(need - span).toFixed(3), `canvas fill ${ratio.toFixed(2)} < ${PHONE_CANVAS_FILL} (content spans ${span.toFixed(2)} of ${cam.h.toFixed(2)})`);
+      const ratio = covered / frameArea;
+      note('fill', 'fill:canvas', 'canvas', +(need - covered).toFixed(3), `canvas fill ${ratio.toFixed(2)} < ${PHONE_CANVAS_FILL} (content covers ${covered.toFixed(1)} of ${frameArea.toFixed(1)})`);
+    }
+    const gaps = emptyBands(boxes, -hy, hy);
+    let worst: [number, number] | null = null;
+    for (const g of gaps) if (!worst || g[1] - g[0] > worst[1] - worst[0]) worst = g;
+    const gapH = worst ? worst[1] - worst[0] : 0;
+    if (gapH <= PHONE_BAND_GAP + 1e-3) this.voidSince = null;
+    else if (this.voidSince == null) this.voidSince = t;
+    else if (t - this.voidSince >= CANVAS_FILL_HOLD && worst) {
+      note('void', 'void:canvas', 'canvas', +gapH.toFixed(3), `empty band ${gapH.toFixed(2)} > ${PHONE_BAND_GAP.toFixed(2)} from y ${worst[0].toFixed(2)} to ${worst[1].toFixed(2)}`);
+    }
+    let long: { id: number; len: number } | null = null;
+    for (const c of connLens) if (c.len > PHONE_CONNECTOR_MAX && (!long || c.len > long.len)) long = c;
+    if (!long) this.spanSince = null;
+    else if (this.spanSince == null) this.spanSince = t;
+    else if (t - this.spanSince >= CANVAS_FILL_HOLD) {
+      note('span', `span:${long.id}`, 'connector', +long.len.toFixed(3), `connector length ${long.len.toFixed(2)} > ${PHONE_CONNECTOR_MAX}`);
     }
   }
+}
+
+/** Area of the union of axis-aligned boxes. */
+function unionArea(boxes: readonly Box[]): number {
+  const ys = new Set<number>();
+  for (const b of boxes) { ys.add(b[1]); ys.add(b[3]); }
+  const y = [...ys].sort((a, b) => a - b);
+  let total = 0;
+  for (let i = 0; i < y.length - 1; i++) {
+    const y0 = y[i]!, y1 = y[i + 1]!;
+    const dy = y1 - y0;
+    if (dy < 1e-9) continue;
+    const mid = (y0 + y1) / 2;
+    const xs: Array<[number, number]> = [];
+    for (const b of boxes) if (b[1] <= mid && b[3] >= mid && b[2] > b[0]) xs.push([b[0], b[2]]);
+    xs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let w = 0, curL = 0, curR = 0, open = false;
+    for (const [l, r] of xs) {
+      if (!open || l > curR) {
+        if (open) w += curR - curL;
+        curL = l; curR = r; open = true;
+      } else curR = Math.max(curR, r);
+    }
+    if (open) w += curR - curL;
+    total += w * dy;
+  }
+  return total;
+}
+
+/** Uncovered y-intervals of [y0, y1], from boxes that occupy a horizontal band. */
+function emptyBands(boxes: readonly Box[], y0: number, y1: number): Array<[number, number]> {
+  const iv = boxes
+    .map((b) => [Math.max(y0, b[1]), Math.min(y1, b[3])] as [number, number])
+    .filter((b) => b[1] - b[0] > 1e-4)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const seg of iv) {
+    const last = merged[merged.length - 1];
+    if (!last || seg[0] > last[1] + 1e-4) merged.push([seg[0], seg[1]]);
+    else last[1] = Math.max(last[1], seg[1]);
+  }
+  const gaps: Array<[number, number]> = [];
+  let cursor = y0;
+  for (const seg of merged) {
+    if (seg[0] - cursor > 1e-3) gaps.push([cursor, seg[0]]);
+    cursor = Math.max(cursor, seg[1]);
+  }
+  if (y1 - cursor > 1e-3) gaps.push([cursor, y1]);
+  return gaps;
 }
 
 // Boxes are padded so thin shapes (a horizontal line has zero height) still overlap
