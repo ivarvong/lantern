@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, PHONE_CANVAS_FILL, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX } from '../src/index.ts';
+import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, DOWN, PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_TYPE_MAX, PHONE_PAD, PHONE_BAND_GAP, PHONE_CONNECTOR_MAX } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -228,106 +228,127 @@ test('stacked texts closer than the minimum gap are a margin error', async () =>
   assert.deepEqual(led, []);
 });
 
-test('portrait coverage, band gap and connector length are named', () => {
-  assert.equal(PHONE_CANVAS_FILL, 0.5);
+test('portrait type scale, padding, band gap and connector length are named', () => {
+  assert.equal(PHONE_TYPE_CODE, 14 * (16 / 390));
+  assert.equal(PHONE_TYPE_LABEL, 16 * (16 / 390));
+  assert.equal(PHONE_TYPE_MAX, 24 * (16 / 390));
+  assert.equal(PHONE_PAD, 8 * (16 / 390));
   assert.equal(PHONE_BAND_GAP, 48 * (16 / 390));
-  assert.equal(PHONE_CONNECTOR_MAX, 10);
+  assert.equal(PHONE_CONNECTOR_MAX, 16);
 });
 
-test('a portrait frame fails fill on area, and void on an empty band', async () => {
+test('portrait scale fails on type past the max and on a stretched box', async () => {
   const phone = { w: 16, h: 16 * (844 / 390) };
-  const sparse = await run(async (s) => {
+  const huge = await run(async (s) => {
     s.frame = phone;
-    const a = new Text('host github.com', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 2]);
-    const b = new Text('0001', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 3.4]);
-    s.add(a, b);
-    await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.25 });
+    const t = new Text('No', { fontSize: PHONE_TYPE_MAX + 0.15 });
+    s.add(t);
+    await s.play(new FadeIn(t), { runTime: 0.2 });
     await s.wait(0.45);
   });
-  assert.ok(sparse.includes('fill'), `expected canvas fill, got ${sparse}`);
-  assert.ok(sparse.includes('void'), `expected a void under the short band, got ${sparse}`);
-  // Top and bottom marks used to pass the old height check. The hole between them is the failure.
-  const spread = await run(async (s) => {
+  assert.ok(huge.includes('scale'), `type above 24px should fail, got ${huge}`);
+  const slab = await run(async (s) => {
     s.frame = phone;
-    const a = new Text('code', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 1.6]);
-    const b = new Text('host github.com', { font: 'mono', fontSize: 0.8 }).moveTo([0, -phone.h / 2 + 1.6]);
-    s.add(a, b);
-    await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.25 });
+    const label = new Text('host', { font: 'mono', fontSize: PHONE_TYPE_LABEL });
+    const box = new Rectangle({ width: 14, height: 3.2, fill: '#5cd0b3', stroke: '#5cd0b3' });
+    label.moveTo(box);
+    s.add(box, label);
+    await s.play(new FadeIn(box), new FadeIn(label), { runTime: 0.2 });
     await s.wait(0.45);
   });
-  assert.ok(spread.includes('fill'), `spread marks do not cover the canvas, got ${spread}`);
-  assert.ok(spread.includes('void'), `spread marks leave an empty band, got ${spread}`);
+  assert.ok(slab.includes('scale'), `a full-width slab should fail, got ${slab}`);
+  const fitted = await run(async (s) => {
+    s.frame = phone;
+    const label = new Text('github.com', { font: 'mono', fontSize: PHONE_TYPE_LABEL });
+    const box = new Rectangle({
+      width: label.advance() + 2 * PHONE_PAD,
+      height: label.height() + 2 * PHONE_PAD,
+      fill: '#5cd0b3', stroke: '#5cd0b3',
+    });
+    label.moveTo(box);
+    const emphasis = new Text('400', { font: 'mono', fontSize: PHONE_TYPE_MAX }).moveTo([0, -2]);
+    s.add(box, label, emphasis);
+    await s.play(new FadeIn(box), new FadeIn(label), new FadeIn(emphasis), { runTime: 0.2 });
+    await s.wait(0.45);
+  });
+  assert.ok(!fitted.includes('scale'), `content plus padding, and 24px emphasis, should pass, got ${fitted}`);
   const wide = await run(async (s) => {
-    const a = new Text('only at the top', { fontSize: 0.5 }).moveTo([0, 3.2]);
-    s.add(a);
-    await s.play(new FadeIn(a), { runTime: 0.2 });
+    const t = new Text('No', { fontSize: PHONE_TYPE_MAX + 0.4 });
+    s.add(t);
+    await s.play(new FadeIn(t), { runTime: 0.2 });
     await s.wait(0.45);
   });
-  assert.ok(!wide.includes('fill') && !wide.includes('void'), `16:9 camera is not the phone canvas, got ${wide}`);
+  assert.ok(!wide.includes('scale'), `16:9 camera is not the phone canvas, got ${wide}`);
 });
 
-test('portrait tiles that meet the edges pass fill and void; a long connector is span', async () => {
+test('a measures bar may be wide; void is only inside a group; a long connector is span', async () => {
   const phone = { w: 16, h: 16 * (844 / 390) };
-  const gap = PHONE_BAND_GAP * 0.4;
-  const packed = await run(async (s) => {
+  const bar = await run(async (s) => {
     s.frame = phone;
-    const n = 8;
-    const top = phone.h / 2 - 0.3;
-    const bottom = -phone.h / 2 + 0.3;
-    const h = (top - bottom - gap * (n - 1)) / n;
-    const tiles: Rectangle[] = [];
-    let y = top;
-    for (let i = 0; i < n; i++) {
-      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
-      r.moveTo([0, y - h / 2]);
-      tiles.push(r);
-      y -= h + gap;
-    }
-    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
-    s.add(...tiles, label);
-    await s.play(new FadeIn(label), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    const g = new Group();
+    g.layoutGroup = 'trace';
+    const rect = new Rectangle({ width: 12, height: 0.7, fill: '#5cd0b3', stroke: 'none' });
+    rect.measures = true;
+    const cap = new Text('ls-refs · 438 ms', { font: 'mono', fontSize: PHONE_TYPE_LABEL });
+    cap.nextTo(rect, DOWN, 0.12, LEFT);
+    g.add(rect, cap);
+    s.add(g);
+    await s.play(new FadeIn(rect), new FadeIn(cap), { runTime: 0.2 });
     await s.wait(0.45);
   });
-  assert.ok(!packed.includes('fill') && !packed.includes('void'), `a filled phone should pass, got ${packed}`);
+  assert.ok(!bar.includes('scale') && !bar.includes('void'), `a duration bar should pass, got ${bar}`);
+  const hole = await run(async (s) => {
+    s.frame = phone;
+    const g = new Group();
+    g.layoutGroup = 'picture';
+    const a = new Text('alpha', { font: 'mono', fontSize: PHONE_TYPE_LABEL }).moveTo([0, 6]);
+    const b = new Text('beta', { font: 'mono', fontSize: PHONE_TYPE_LABEL }).moveTo([0, 0]);
+    g.add(a, b);
+    s.add(g);
+    await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.2 });
+    await s.wait(0.45);
+  });
+  assert.ok(hole.includes('void'), `a gap inside one group should fail, got ${hole}`);
+  const bands = await run(async (s) => {
+    s.frame = phone;
+    const code = new Group();
+    code.layoutGroup = 'code';
+    code.add(new Text('code', { font: 'mono', fontSize: PHONE_TYPE_CODE }).moveTo([0, phone.h / 2 - 1.4]));
+    const picture = new Group();
+    picture.layoutGroup = 'picture';
+    picture.add(new Text('github.com', { font: 'mono', fontSize: PHONE_TYPE_LABEL }));
+    s.add(code, picture);
+    await s.play(new FadeIn(code), new FadeIn(picture), { runTime: 0.2 });
+    await s.wait(0.45);
+  });
+  assert.ok(!bands.includes('void'), `the margin between groups is not a void, got ${bands}`);
   const spanned = await run(async (s) => {
     s.frame = phone;
-    const n = 8;
-    const top = phone.h / 2 - 0.3;
-    const bottom = -phone.h / 2 + 0.3;
-    const h = (top - bottom - gap * (n - 1)) / n;
-    const tiles: Rectangle[] = [];
-    let y = top;
-    for (let i = 0; i < n; i++) {
-      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
-      r.moveTo([0, y - h / 2]);
-      tiles.push(r);
-      y -= h + gap;
-    }
-    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
+    const label = new Text('pkt', { font: 'mono', fontSize: PHONE_TYPE_LABEL });
+    const chip = new Rectangle({
+      width: label.advance() + 2 * PHONE_PAD,
+      height: label.height() + 2 * PHONE_PAD,
+      fill: '#5cd0b3', stroke: '#5cd0b3',
+    });
+    label.moveTo(chip);
     const wire = new Line([0, phone.h / 2 - 1], [0, -phone.h / 2 + 1], { stroke: '#ffffff', strokeWidth: 0.04 });
-    s.add(...tiles, label, wire);
-    await s.play(new FadeIn(label), new Create(wire), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    s.add(chip, label, wire);
+    await s.play(new FadeIn(label), new FadeIn(chip), new Create(wire), { runTime: 0.25 });
     await s.wait(0.45);
   });
   assert.ok(spanned.includes('span'), `a full-height connector should fail, got ${spanned}`);
   const local = await run(async (s) => {
     s.frame = phone;
-    const n = 8;
-    const top = phone.h / 2 - 0.3;
-    const bottom = -phone.h / 2 + 0.3;
-    const h = (top - bottom - gap * (n - 1)) / n;
-    const tiles: Rectangle[] = [];
-    let y = top;
-    for (let i = 0; i < n; i++) {
-      const r = new Rectangle({ width: 14.4, height: h, fill: '#5cd0b3', fillOpacity: 0.9, stroke: '#5cd0b3' });
-      r.moveTo([0, y - h / 2]);
-      tiles.push(r);
-      y -= h + gap;
-    }
-    const label = new Text('packed', { fontSize: 0.6 }).moveTo(tiles[0]!);
-    const wire = new Line([0, top - 0.2], [1.2, top - 0.2], { stroke: '#ffffff', strokeWidth: 0.04 });
-    s.add(...tiles, label, wire);
-    await s.play(new FadeIn(label), new Create(wire), ...tiles.map((r) => new FadeIn(r)), { runTime: 0.25 });
+    const label = new Text('pkt', { font: 'mono', fontSize: PHONE_TYPE_LABEL });
+    const chip = new Rectangle({
+      width: label.advance() + 2 * PHONE_PAD,
+      height: label.height() + 2 * PHONE_PAD,
+      fill: '#5cd0b3', stroke: '#5cd0b3',
+    });
+    label.moveTo(chip);
+    const wire = new Line([-0.4, 1.2], [0.8, 1.2], { stroke: '#ffffff', strokeWidth: 0.04 });
+    s.add(chip, label, wire);
+    await s.play(new FadeIn(label), new FadeIn(chip), new Create(wire), { runTime: 0.25 });
     await s.wait(0.45);
   });
   assert.ok(!local.includes('span'), `a short connector should pass, got ${local}`);

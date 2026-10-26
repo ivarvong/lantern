@@ -98,6 +98,16 @@ export class Mobject {
    * one of the two declares it.
    */
   allowOverlap = false;
+  /**
+   * Portrait layout group. The void check measures empty bands inside one
+   * group (code, picture, trace), not the margin between groups.
+   */
+  layoutGroup: string | null = null;
+  /**
+   * This rectangle's width encodes a quantity (bytes, time). The scale check
+   * does not treat it as a label that must hug its text.
+   */
+  measures = false;
 
   constructor(style: Style = {}) {
     this.id = nextId++;

@@ -17,12 +17,13 @@
 //   ghost      two texts overlap while both are only partly opaque (a crossfade)
 //   overflow   a label whose center sits in its shape sticks out of that shape
 //   pierce     a connector crosses a glyph run or a box edge away from its ends
-//   fill       a box's contents sit in one corner of it (the box was not sized to them),
-//              or a portrait camera's settled picture covers less than PHONE_CANVAS_FILL
-//              of the frame area. Coverage is the union of text and rectangle boxes,
-//              not the vertical distance between the top mark and the bottom one.
-//   void       a portrait camera has an empty horizontal band taller than PHONE_BAND_GAP
-//              (about 48px on a 390-wide phone). Connector strokes do not fill a band.
+//   fill       a box's contents sit in one corner of it (the box was not sized to them)
+//   scale      on a portrait camera, text larger than PHONE_TYPE_MAX, or a box wider
+//              or taller than the text inside it plus PHONE_PAD. A measures bar is
+//              exempt: its width encodes bytes or time.
+//   void       inside one portrait layout group, an empty horizontal band taller
+//              than PHONE_BAND_GAP. The margin around a group is not a void.
+//              Connector strokes do not fill a band.
 //   span       a portrait connector is longer than PHONE_CONNECTOR_MAX
 //   overlap    two settled shapes occupy the same space, and neither declares it
 //   margin     two settled texts are closer than the minimum gap
@@ -55,27 +56,48 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'void' | 'span' | 'overlap' | 'margin' | 'intrude' | 'clip';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'scale' | 'void' | 'span' | 'overlap' | 'margin' | 'intrude' | 'clip';
+
+/** The phone frame is 16 scene units across 390 CSS pixels. */
+const PHONE_PX = 390 / 16;
 
 /**
- * A portrait camera's settled picture must cover this fraction of the frame
- * area. The measure is the union of text and rectangle boxes, so pinning one
- * mark at the top and another at the bottom does not count as coverage.
+ * Code on a portrait camera, in scene units. 14px at 390 wide (the band is 13–14).
  */
-export const PHONE_CANVAS_FILL = 0.5;
+export const PHONE_TYPE_CODE = 14 / PHONE_PX;
 
 /**
- * Tallest empty horizontal band a portrait camera may hold, in scene units.
- * The phone frame is 16 units across 390px, so this is 48px.
+ * Data and labels on a portrait camera, in scene units. 16px at 390 wide
+ * (the band is 15–18).
  */
-export const PHONE_BAND_GAP = 48 * (16 / 390);
+export const PHONE_TYPE_LABEL = 16 / PHONE_PX;
 
 /**
- * Longest connector on a portrait camera, in scene units. A short elbow between
- * adjacent bands fits; a diagonal across an empty band does not. 10 units is
- * about 244px at 390 wide.
+ * Largest type on a portrait camera, in scene units. One emphasis size, 24px
+ * at 390 wide. Nothing larger.
  */
-export const PHONE_CONNECTOR_MAX = 10;
+export const PHONE_TYPE_MAX = 24 / PHONE_PX;
+
+/**
+ * Padding on each side of a content-sized box, in scene units. 8px at 390 wide.
+ * A box may be this much larger than the text inside it. A measures bar,
+ * whose width encodes bytes or time, is not held to it.
+ */
+export const PHONE_PAD = 8 / PHONE_PX;
+
+/**
+ * Tallest empty horizontal band inside one portrait layout group, in scene
+ * units. 48px at 390 wide. The margin around the group is not a band.
+ */
+export const PHONE_BAND_GAP = 48 / PHONE_PX;
+
+/**
+ * Longest connector on a portrait camera, in scene units. A drop from the code
+ * band onto a picture centered below it fits; a line down the whole phone does
+ * not. 16 units is about 390px at 390 wide: a drop from the code band down the
+ * side of a centered picture, not a line the height of the phone.
+ */
+export const PHONE_CONNECTOR_MAX = 16;
 
 /** A one-frame gap between animations is not a picture. A held sparse frame is. */
 const CANVAS_FILL_HOLD = 0.18;
@@ -120,15 +142,15 @@ export class MotionSink implements Sink {
   /** Text-layout failures sampled while the scene runs. One per offending mobject. */
   layoutEvents: MotionEvent[];
   private layoutSeen: Set<string>;
-  /** When the current portrait picture first settled below PHONE_CANVAS_FILL. */
-  private canvasLowSince: number | null;
-  /** When an empty band taller than PHONE_BAND_GAP first settled. */
+  /** When portrait type or a stretched box first settled. */
+  private scaleSince: number | null;
+  /** When an empty band inside a layout group first settled. */
   private voidSince: number | null;
   /** When a connector longer than PHONE_CONNECTOR_MAX first settled. */
   private spanSince: number | null;
   constructor() {
     this.frames = []; this.labels = new Map(); this.layoutEvents = []; this.layoutSeen = new Set();
-    this.canvasLowSince = null; this.voidSince = null; this.spanSince = null;
+    this.scaleSince = null; this.voidSince = null; this.spanSince = null;
   }
   async frame(scene: Scene): Promise<void> {
     const f = new Map<number, LeafSample>();
@@ -557,7 +579,7 @@ export class MotionSink implements Sink {
     }
 
     // Portrait only. A 16:9 scene is a different camera; this is the phone canvas.
-    if (!(cam.h > cam.w)) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
+    if (!(cam.h > cam.w)) { this.scaleSince = null; this.voidSince = null; this.spanSince = null; return; }
     // Opacity, not fillOpacity: a card filled at a few percent is fully on screen.
     // A fade that has not landed — even a first frame at nearly zero — is the
     // picture still arriving, so a settled code line is not the whole frame.
@@ -578,45 +600,104 @@ export class MotionSink implements Sink {
       if (!unit && !flux) for (const c of m.children) watch(c);
     };
     for (const top of scene.mobjects) watch(top);
-    if (flux) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
-    // Connector strokes are not content: a diagonal across a hole must not hide it,
-    // and its bounding box must not count as coverage.
-    const boxes: Box[] = [];
-    const clipToFrame = (b: Box): Box | null => {
-      const x0 = Math.max(b[0], -hx), y0 = Math.max(b[1], -hy);
-      const x1 = Math.min(b[2], hx), y1 = Math.min(b[3], hy);
-      if (x1 - x0 < 1e-3 || y1 - y0 < 1e-3) return null;
-      return [x0, y0, x1, y1];
+    if (flux) { this.scaleSince = null; this.voidSince = null; this.spanSince = null; return; }
+    const groupOf = (m: Mobject): string | null => {
+      for (let p: Mobject | null = m; p; p = p.parent) if (p.layoutGroup) return p.layoutGroup;
+      return null;
     };
-    let nText = 0;
+    const holdsBox = (box: Box, self: Rectangle): boolean => rects.some((other) => {
+      if (other.m === self || area(other.box) < 0.15) return false;
+      const cx = (other.box[0] + other.box[2]) / 2, cy = (other.box[1] + other.box[3]) / 2;
+      return cx > box[0] && cx < box[2] && cy > box[1] && cy < box[3];
+    });
+    // Type, and boxes sized to their text. A measures bar's width is the data.
+    let scaleBad = false;
+    let scaleWhat = '';
+    let scaleMag = 0;
+    let scaleDetail = '';
+    for (const g of glyphRuns) {
+      if (shown(g.m) < 0.9) continue;
+      const s = leaf(g.m);
+      if (!s || !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+      const natural = g.m.run.ascent + g.m.run.descent;
+      const em = natural < 1e-6 ? g.m.fontSize : g.m.fontSize * (g.box[3] - g.box[1]) / natural;
+      if (em <= PHONE_TYPE_MAX + 1e-3) continue;
+      scaleBad = true;
+      scaleMag = em;
+      scaleWhat = `"${g.m.text.slice(0, 24)}"`;
+      scaleDetail = `type ${em.toFixed(3)} > ${PHONE_TYPE_MAX.toFixed(3)}`;
+      break;
+    }
+    if (!scaleBad) {
+      for (const r of rects) {
+        if (r.m.measures || holdsBox(r.box, r.m)) continue;
+        const inside: Box[] = [];
+        for (const g of glyphRuns) {
+          if (shown(g.m) < 0.9) continue;
+          const s = leaf(g.m);
+          if (!s || !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+          const cx = (g.box[0] + g.box[2]) / 2, cy = (g.box[1] + g.box[3]) / 2;
+          if (cx <= r.box[0] || cx >= r.box[2] || cy <= r.box[1] || cy >= r.box[3]) continue;
+          inside.push(g.box);
+        }
+        const rw = r.box[2] - r.box[0], rh = r.box[3] - r.box[1];
+        let extraW: number, extraH: number;
+        if (!inside.length) {
+          extraW = rw; extraH = rh;
+        } else {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (const b of inside) {
+            x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]);
+            x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
+          }
+          extraW = rw - (x1 - x0); extraH = rh - (y1 - y0);
+        }
+        const room = 2 * PHONE_PAD + 0.1;
+        if (extraW <= room && extraH <= room) continue;
+        scaleBad = true;
+        scaleMag = Math.max(extraW, extraH);
+        scaleWhat = `Rectangle#${r.m.id}`;
+        scaleDetail = `box exceeds its text by ${extraW.toFixed(2)} × ${extraH.toFixed(2)} (pad ${PHONE_PAD.toFixed(2)} each side)`;
+        break;
+      }
+    }
+    if (!scaleBad) this.scaleSince = null;
+    else if (this.scaleSince == null) this.scaleSince = t;
+    else if (t - this.scaleSince >= CANVAS_FILL_HOLD) {
+      note('scale', 'scale:portrait', scaleWhat, +scaleMag.toFixed(3), scaleDetail);
+    }
+    // Empty bands inside one group. The margin outside the group is allowed.
+    const byGroup = new Map<string, Box[]>();
+    const pushBand = (group: string | null, box: Box): void => {
+      if (!group) return;
+      const list = byGroup.get(group) ?? [];
+      list.push(box);
+      byGroup.set(group, list);
+    };
     for (const g of glyphRuns) {
       if (shown(g.m) < 0.85) continue;
-      const c = clipToFrame(g.box);
-      if (c) { boxes.push(c); nText++; }
+      pushBand(groupOf(g.m), g.box);
     }
     for (const r of rects) {
-      if (area(r.box) < 0.08) continue;
-      const c = clipToFrame(r.box);
-      if (c) boxes.push(c);
+      if (area(r.box) < 0.08 || holdsBox(r.box, r.m)) continue;
+      pushBand(groupOf(r.m), r.box);
     }
-    if (nText < 1) { this.canvasLowSince = null; this.voidSince = null; this.spanSince = null; return; }
-    const covered = unionArea(boxes);
-    const frameArea = cam.w * cam.h;
-    const need = PHONE_CANVAS_FILL * frameArea;
-    if (covered + 1e-3 >= need) this.canvasLowSince = null;
-    else if (this.canvasLowSince == null) this.canvasLowSince = t;
-    else if (t - this.canvasLowSince >= CANVAS_FILL_HOLD) {
-      const ratio = covered / frameArea;
-      note('fill', 'fill:canvas', 'canvas', +(need - covered).toFixed(3), `canvas fill ${ratio.toFixed(2)} < ${PHONE_CANVAS_FILL} (content covers ${covered.toFixed(1)} of ${frameArea.toFixed(1)})`);
-    }
-    const gaps = emptyBands(boxes, -hy, hy);
     let worst: [number, number] | null = null;
-    for (const g of gaps) if (!worst || g[1] - g[0] > worst[1] - worst[0]) worst = g;
+    let worstGroup = '';
+    for (const [group, boxes] of byGroup) {
+      if (boxes.length < 2) continue;
+      let y0 = Infinity, y1 = -Infinity;
+      for (const b of boxes) { y0 = Math.min(y0, b[1]); y1 = Math.max(y1, b[3]); }
+      for (const gap of emptyBands(boxes, y0, y1)) {
+        const h = gap[1] - gap[0];
+        if (!worst || h > worst[1] - worst[0]) { worst = gap; worstGroup = group; }
+      }
+    }
     const gapH = worst ? worst[1] - worst[0] : 0;
     if (gapH <= PHONE_BAND_GAP + 1e-3) this.voidSince = null;
     else if (this.voidSince == null) this.voidSince = t;
     else if (t - this.voidSince >= CANVAS_FILL_HOLD && worst) {
-      note('void', 'void:canvas', 'canvas', +gapH.toFixed(3), `empty band ${gapH.toFixed(2)} > ${PHONE_BAND_GAP.toFixed(2)} from y ${worst[0].toFixed(2)} to ${worst[1].toFixed(2)}`);
+      note('void', `void:${worstGroup}`, worstGroup, +gapH.toFixed(3), `empty band ${gapH.toFixed(2)} > ${PHONE_BAND_GAP.toFixed(2)} inside ${worstGroup} from y ${worst[0].toFixed(2)} to ${worst[1].toFixed(2)}`);
     }
     let long: { id: number; len: number } | null = null;
     for (const c of connLens) if (c.len > PHONE_CONNECTOR_MAX && (!long || c.len > long.len)) long = c;
@@ -626,33 +707,6 @@ export class MotionSink implements Sink {
       note('span', `span:${long.id}`, 'connector', +long.len.toFixed(3), `connector length ${long.len.toFixed(2)} > ${PHONE_CONNECTOR_MAX}`);
     }
   }
-}
-
-/** Area of the union of axis-aligned boxes. */
-function unionArea(boxes: readonly Box[]): number {
-  const ys = new Set<number>();
-  for (const b of boxes) { ys.add(b[1]); ys.add(b[3]); }
-  const y = [...ys].sort((a, b) => a - b);
-  let total = 0;
-  for (let i = 0; i < y.length - 1; i++) {
-    const y0 = y[i]!, y1 = y[i + 1]!;
-    const dy = y1 - y0;
-    if (dy < 1e-9) continue;
-    const mid = (y0 + y1) / 2;
-    const xs: Array<[number, number]> = [];
-    for (const b of boxes) if (b[1] <= mid && b[3] >= mid && b[2] > b[0]) xs.push([b[0], b[2]]);
-    xs.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    let w = 0, curL = 0, curR = 0, open = false;
-    for (const [l, r] of xs) {
-      if (!open || l > curR) {
-        if (open) w += curR - curL;
-        curL = l; curR = r; open = true;
-      } else curR = Math.max(curR, r);
-    }
-    if (open) w += curR - curL;
-    total += w * dy;
-  }
-  return total;
 }
 
 /** Uncovered y-intervals of [y0, y1], from boxes that occupy a horizontal band. */

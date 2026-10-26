@@ -6,10 +6,12 @@
   without crossing text or another box. `verify:motion` rejects a frame that breaks
   those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`, `clip`). `intrude` is a text
   sitting inside a box it is not part of, including mid-flight. `clip` is text past the camera.
-  On a portrait camera, `fill` fails when the union of text and rectangle boxes
-  covers less than `PHONE_CANVAS_FILL` (0.5) of the frame area. `void` fails on an
-  empty horizontal band taller than `PHONE_BAND_GAP` (48px at 390 wide). `span`
-  fails when a connector is longer than `PHONE_CONNECTOR_MAX` (10 scene units).
+  On a portrait camera, `scale` fails when text exceeds `PHONE_TYPE_MAX` (24px at
+  390 wide) or a box is larger than its text plus `PHONE_PAD` (8px) on each side.
+  A `measures` bar is exempt: its width encodes bytes or time. `void` fails on an
+  empty band inside one layout group taller than `PHONE_BAND_GAP` (48px); the
+  margin around the group is not a void. `span` fails when a connector is longer
+  than `PHONE_CONNECTOR_MAX` (16 scene units).
 - A scene can set `frame` to a camera other than 16:9. The player follows that aspect.
 - A connector that starts in the clearance beside a wrapped line can leave that gap
   instead of falling back to a straight cut through the line.

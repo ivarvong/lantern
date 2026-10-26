@@ -5,50 +5,62 @@
 // 3f07a75c667ab8afad9e91d396836eb21abb1b8f. The page stays
 // ply.ivar.workers.dev/view.
 //
-// The camera is the 390×844 phone, not a 16:9 stage letterboxed onto one.
-// Code sits at the top, one picture fills the middle, the trace sits on the bottom.
-// The gap between those bands stays under PHONE_BAND_GAP (48px at 390 wide).
+// The camera is the 390×844 phone. Code sits at the top, the picture is a
+// content-sized group centered in the space that remains, and the trace is
+// pinned to the bottom. Empty margin around that group is part of the
+// composition. Boxes hug their text; a bar is wide only when its width is
+// bytes or time.
+//
 // Colors are the concept, on every pane:
 //   host / ls-refs / blob:none retry = teal,  tree / tree:0 = green,
 //   commit / offset = blue,  ref-delta = red,  credential = orange,
 //   blob bytes = grey,  pkt length / span = gold,  HTTP 400 = red.
 import {
   Scene, Group, Text, Rectangle, Line, CurvedArrow, FadeIn, FadeOut, Create, Transform, LaggedStart,
-  linear, LEFT, RIGHT, UL, PHONE_BAND_GAP,
+  LEFT, RIGHT, DOWN, UL,
+  PHONE_TYPE_CODE, PHONE_TYPE_LABEL, PHONE_PAD, PHONE_CONNECTOR_MAX,
   BLUE, TEAL, GREEN, RED, GREY, WHITE, ORANGE, GOLD,
 } from '../src/index.ts';
 import type { Sink, SceneOptions, Mobject } from '../src/index.ts';
+import { PACK_BYTES, PACK_COMMIT_OID, PACK_HEADER, PACK_OBJECTS, PACK_TRAILER, wireName } from './lib/small-pack.ts';
+import type { PackWire, PackWireObject } from './lib/small-pack.ts';
 
 const INK = '#d8d8d8';
 const DIM = '#8d8d8d';
-/** Phone camera. 16 scene units across, so a 0.7 glyph is about 17px at 390. */
 const PHONE_W = 16;
 const PHONE_H = PHONE_W * (844 / 390);
-const FS = 0.62;
-const MAX_W = 13.15;
-const INK_LEFT = -7.15;
+const FS = PHONE_TYPE_CODE;
+const LABEL = PHONE_TYPE_LABEL;
+const PAD = PHONE_PAD;
+const MAX_W = 14.6;
+const INK_LEFT = -7.3;
 const ELL = '...';
+const CHIP_GAP = 0.16;
 
-// test/fixtures/viewer/small.pack (930 B). Not octocat/Hello-World's HEAD.
-const PACK: ReadonlyArray<readonly [off: number, len: number, fill: string]> = [
-  [0, 12, '#5c5c5c'],
-  [12, 371, BLUE],
-  [383, 183, RED],
-  [566, 108, GREEN],
-  [674, 15, GREY],
-  [689, 27, GREY],
-  [716, 43, GREEN],
-  [759, 16, GREY],
-  [775, 108, GREEN],
-  [883, 27, GREY],
-  [910, 20, '#5c5c5c'],
-];
-const PACK_BYTES = 930;
+function packObject(kind: PackWireObject['kind']): PackWireObject {
+  const found = PACK_OBJECTS.find((o) => o.kind === kind);
+  if (!found) throw new Error(`fixture pack is missing a ${kind}`);
+  return found;
+}
+const commitObj = packObject('commit');
+const refDelta = packObject('ref_delta');
+const treeObj = packObject('tree');
+
+function kindColor(kind: PackWire): string {
+  if (kind === 'commit') return BLUE;
+  if (kind === 'tree') return GREEN;
+  if (kind === 'ref_delta' || kind === 'ofs_delta') return RED;
+  return GREY;
+}
+
+function legendText(obj: PackWireObject): string {
+  return `@${obj.offset} · ${obj.length} B · ${wireName(obj.kind)}`;
+}
 
 /**
  * pkt() in src/pktline.js: 4 hex digits plus the payload bytes. Callers pass
- * the trailing newline inside the payload (`command=ls-refs\n`), and the
- * length counts it. The newline is not drawn.
+ * the trailing newline inside the payload, and the length counts it.
+ * The newline is not drawn.
  */
 function pktLine(payload: string): { hex: string; body: string } {
   const hex = (payload.length + 4).toString(16).padStart(4, '0');
@@ -61,13 +73,6 @@ function mono(text: string, fontSize: number, color: string, anchor: 'start' | '
 
 function widthOf(text: string, fontSize: number): number {
   return mono(text, fontSize, INK, 'start').advance();
-}
-
-/** Largest size at which `text` still fits the phone width. */
-function fitSize(text: string, maxW: number, cap: number): number {
-  const w = widthOf(text, 1);
-  if (w < 1e-6) return cap;
-  return Math.min(cap, maxW / w);
 }
 
 function atomsOf(span: string, token: string): string[] {
@@ -140,215 +145,121 @@ function shrinkLine(line: string, token: string, fs: number, maxW: number): stri
   return widthOf(s, fs) <= maxW + 0.05 ? s : token;
 }
 
-function buildLine(source: string, token: string, color: string, top: number): { group: Group; token: Text } {
-  const lines = fitCode(source, token, FS, MAX_W);
-  const rows: Group[] = [];
-  let tok: Text | null = null;
-  let y = 0;
-  for (const line of lines) {
-    const i = line.indexOf(token);
-    const parts: Text[] = [];
-    if (i < 0) parts.push(mono(line, FS, DIM, 'start'));
-    else {
-      if (i > 0) parts.push(mono(line.slice(0, i), FS, DIM, 'start'));
-      const t = mono(token, FS, color, 'start');
-      parts.push(t);
-      tok = t;
-      const rest = line.slice(i + token.length);
-      if (rest) parts.push(mono(rest, FS, DIM, 'start'));
-    }
-    let x = 0;
-    for (const p of parts) { p.moveTo([x, 0], LEFT); x += p.advance(); }
-    const row = new Group(...parts);
-    row.moveTo([INK_LEFT, y], LEFT);
-    rows.push(row);
-    // Room for a connector to leave between wrapped lines. Clearance on both
-    // sides is wider than the old 1.05 pitch, so the route fell through the type.
-    y -= 1.28;
-  }
-  if (!tok) throw new Error(`token ${token} missing after layout`);
-  const group = new Group(...rows);
-  group.shift([0, top - group.top()[1]]);
-  return { group, token: tok };
-}
-
-/** Inset from the bezel, and the gap between code, picture and trace. Both are under PHONE_BAND_GAP. */
-const EDGE = 0.38;
-const BAND = 0.42;
-const TILE_W = 14.7;
-const TILE_GAP = 0.22;
-/** Room above the pack bar for the ref-delta arc. BAND + ARC_ROOM stays under the void check. */
-const ARC_ROOM = 1.15;
-const PACK_H = 2.6;
-
-const ROW_W = 14.05;
-const FORM_PAD = 0.22;
-const FORM_GAP = 0.16;
-
 interface Run { text: string; color: string }
-interface CellSpec {
-  fill: string;
-  lines: Run[][];
-  align?: 'center' | 'start';
-  /** The first line is not drawn. The code token lands on that slot. */
-  blank?: boolean;
-  wash?: number;
-}
-interface Cell {
-  group: Group;
-  shape: Rectangle;
-  texts: Text[];
-  landing: { at: [number, number]; text: string; fs: number } | null;
-}
-interface Field { name: string; value: string; nameColor: string; valueColor: string; credential: boolean }
 
-function glide(distance: number): number {
-  return Math.min(2.05, Math.max(0.55, distance * 0.42));
+/** A box the size of its text, plus PHONE_PAD on every side. */
+function chip(lines: Run[][], stroke: string): Group {
+  const textH = mono('Mg', LABEL, INK).height();
+  const lead = 0.08;
+  const rendered: Text[][] = [];
+  let blockW = 0;
+  for (const line of lines) {
+    const row: Text[] = [];
+    let x = 0;
+    for (let i = 0; i < line.length; i++) {
+      const run = line[i]!;
+      const t = mono(run.text, LABEL, run.color, 'start');
+      row.push(t);
+      x += t.advance() + (i < line.length - 1 ? 0.22 : 0);
+    }
+    blockW = Math.max(blockW, x);
+    rendered.push(row);
+  }
+  const blockH = rendered.length * textH + Math.max(0, rendered.length - 1) * lead;
+  const shape = new Rectangle({
+    width: blockW + 2 * PAD, height: blockH + 2 * PAD, cornerRadius: 0.12,
+    stroke, strokeWidth: 0.04, fill: stroke, fillOpacity: 0.16,
+  });
+  let y = blockH / 2 - textH / 2;
+  for (const row of rendered) {
+    let x = -blockW / 2;
+    for (let i = 0; i < row.length; i++) {
+      const t = row[i]!;
+      t.moveTo([x, y], LEFT);
+      x += t.advance() + 0.22;
+    }
+    y -= textH + lead;
+  }
+  return new Group(shape, ...rendered.flat());
 }
 
-function word(text: string, fill: string, ink: string = WHITE): CellSpec {
-  return { fill, lines: [[{ text, color: ink }]] };
+function pile(chips: Group[], align: 'center' | 'left' = 'center'): Group {
+  const g = new Group(...chips);
+  if (chips.length > 1) g.arrange(DOWN, CHIP_GAP, align === 'left' ? LEFT : [0, 0]);
+  return g;
 }
 
-function pktRow(payload: string, color: string, hex?: string): CellSpec {
+function pktChip(payload: string, color: string, hex?: string): Group {
   const framed = payload ? pktLine(payload) : { hex: hex ?? '0000', body: '' };
-  const runs: Run[] = framed.body
+  const line: Run[] = framed.body
     ? [{ text: framed.hex, color: GOLD }, { text: framed.body, color }]
     : [{ text: framed.hex, color: GOLD }];
-  return { fill: color === DIM ? GOLD : color, lines: [runs], align: 'start', wash: 0.16 };
+  return chip([line], color);
 }
 
-function makeCell(spec: CellSpec, width: number, height: number, cy: number): Cell {
-  const single = spec.lines.length === 1 && spec.lines[0]!.length === 1;
-  const align = spec.align ?? (single ? 'center' : 'start');
-  const lineWidth = (line: Run[]): number => line.reduce((s, r, i) => s + widthOf(r.text, 1) + (i ? 0.28 : 0), 0);
-  const widest = Math.max(0.2, ...spec.lines.map(lineWidth));
-  // Big type in a tall band. Width and the line count keep the glyphs inside the wash.
-  const fs = Math.min(2.05, (height - 0.24) / (spec.lines.length * 1.38), (width - 0.7) / widest);
-  const shape = new Rectangle({
-    width, height, cornerRadius: Math.min(0.2, height * 0.14),
-    stroke: spec.fill, strokeWidth: 0.06,
-    fill: spec.fill, fillOpacity: spec.wash ?? 0.5,
-  });
-  shape.moveTo([0, cy]);
-  const draw = spec.blank ? [] : spec.lines;
-  const texts: Text[] = [];
-  const lineH = fs * 1.38;
-  const lead = 0.08;
-  const block = Math.max(lineH, draw.length * lineH + lead * Math.max(0, draw.length - 1));
-  let y = cy + block / 2 - lineH / 2;
-  const left = -width / 2 + 0.42;
-  for (const line of draw) {
-    if (align === 'center' && line.length === 1) {
-      texts.push(mono(line[0]!.text, fs, line[0]!.color).moveTo([0, y]));
-    } else {
-      let x = align === 'center' ? -lineWidth(line) * fs / 2 : left;
-      // lineWidth is at font size 1, so scale it.
-      if (align === 'center') x = -line.reduce((s, r, i) => s + widthOf(r.text, fs) + (i ? 0.28 : 0), 0) / 2;
-      for (const r of line) {
-        const t = mono(r.text, fs, r.color, 'start');
-        t.moveTo([x, y], LEFT);
-        texts.push(t);
-        x += t.advance() + 0.28;
-      }
-    }
-    y -= lineH + lead;
-  }
-  const first = spec.lines[0]?.[0];
-  const landing = spec.blank && first ? { at: [0, cy] as [number, number], text: first.text, fs } : null;
-  return { group: new Group(shape, ...texts), shape, texts, landing };
+/** The commit fetch body from fetchBody(), delim after command=fetch, flush at the end. */
+function fetchColumn(filter: string): { group: Group; filter: Group } {
+  const framed = pktLine(`filter ${filter}\n`);
+  const filterChip = chip([[{ text: framed.hex, color: GOLD }, { text: framed.body, color: filter === 'tree:0' ? GREEN : TEAL }]], filter === 'tree:0' ? GREEN : TEAL);
+  const oid = PACK_COMMIT_OID;
+  const want = chip([
+    [{ text: pktLine(`want ${oid}\n`).hex, color: GOLD }, { text: 'want', color: INK }],
+    [{ text: oid.slice(0, 20), color: INK }],
+    [{ text: oid.slice(20), color: INK }],
+  ], DIM);
+  // fetchBody() order: command, delim, want, filter, deepen, ofs-delta, no-progress, done, flush.
+  const group = pile([
+    pktChip('command=fetch\n', INK),
+    pktChip('', GOLD, '0001'),
+    want,
+    filterChip,
+    pktChip('deepen 1\n', DIM),
+    pktChip('ofs-delta\n', DIM),
+    pktChip('no-progress\n', DIM),
+    pktChip('done\n', DIM),
+    pktChip('', GOLD, '0000'),
+  ], 'left');
+  return { group, filter: filterChip };
 }
 
-function stack(specs: CellSpec[], top: number, bottom: number, width = TILE_W): Cell[] {
-  const n = specs.length;
-  if (n < 1) throw new Error('empty picture');
-  const h = (top - bottom - TILE_GAP * (n - 1)) / n;
-  if (!(h > 0.9)) throw new Error(`cell height ${h.toFixed(2)} for ${n} rows in ${(top - bottom).toFixed(2)}`);
-  const out: Cell[] = [];
-  let y = top;
-  for (const spec of specs) {
-    out.push(makeCell(spec, width, h, y - h / 2));
-    y -= h + TILE_GAP;
-  }
-  return out;
-}
+interface Field { name: string; value: string; nameColor: string; valueColor: string; credential: boolean }
+interface Row { group: Group; shape: Rectangle; name: Text; value: Text | null }
 
-function reseatCellAnims(cells: Cell[], top: number, bottom: number, width: number): Transform[] {
-  const n = cells.length;
-  const h = (top - bottom - TILE_GAP * Math.max(0, n - 1)) / n;
-  if (!(h > 0.9)) throw new Error(`reseat height ${h.toFixed(2)}`);
-  const anims: Transform[] = [];
-  let y = top;
-  for (const cell of cells) {
-    const cy = y - h / 2;
-    const shape = new Rectangle({
-      width, height: h, cornerRadius: Math.min(0.2, h * 0.14),
-      stroke: cell.shape.style.stroke, strokeWidth: 0.06,
-      fill: cell.shape.style.fill, fillOpacity: cell.shape.style.fillOpacity,
-    }).moveTo([cell.shape.center()[0], cy]);
-    anims.push(new Transform(cell.shape, shape));
-    if (cell.texts.length) {
-      const mid = cell.texts.reduce((s, t) => s + t.center()[1], 0) / cell.texts.length;
-      for (const t of cell.texts) {
-        const copy = t.copy();
-        copy.shift([0, cy - mid]);
-        anims.push(new Transform(t, copy));
-      }
-    }
-    y -= h + TILE_GAP;
-  }
-  return anims;
-}
-
-/** One size for every row, so the value column and the pitch stay even as rows leave. */
-function formSize(fields: Field[], rowH: number): number {
-  const inner = ROW_W - 0.68;
-  let fs = Math.min(1.05, rowH * 0.62);
+function layForm(fields: Field[]): { frame: Rectangle; rows: Row[]; group: Group } {
+  const gutter = 0.5;
+  const shown = (f: Field): string => f.name === 'user-agent' ? 'ply-viewer/0.1.0' : f.value;
+  let inner = 0;
   for (const f of fields) {
-    // user-agent grows to the forced product token; budget for that before it morphs.
-    const shown = f.name === 'user-agent' ? 'ply-viewer/0.1.0' : f.value;
-    const budget = inner - (shown ? 0.85 : 0);
-    const need = widthOf(f.name, 1) + (shown ? widthOf(shown, 1) : 0);
-    fs = Math.min(fs, budget / Math.max(0.2, need));
+    const v = shown(f);
+    inner = Math.max(inner, widthOf(f.name, LABEL) + (v ? gutter + widthOf(v, LABEL) : 0));
   }
-  return fs;
-}
-
-function gridRow(f: Field, rowH: number, fs: number): Group {
-  const bg = new Rectangle({
-    width: ROW_W, height: rowH, cornerRadius: 0.1,
-    stroke: 'none', fill: f.nameColor, fillOpacity: 0.42,
+  const textH = mono('Mg', LABEL, INK).height();
+  const rowH = textH + 2 * PAD;
+  const W = inner + 2 * PAD;
+  const rows: Row[] = fields.map((f) => {
+    const shape = new Rectangle({
+      width: W, height: rowH, cornerRadius: 0.1,
+      stroke: f.nameColor, strokeWidth: 0.04,
+      fill: f.nameColor, fillOpacity: 0.14,
+    });
+    const name = mono(f.name, LABEL, f.nameColor, 'start');
+    const value = f.value ? mono(f.value, LABEL, f.valueColor, 'end') : null;
+    name.moveTo([-W / 2 + PAD, 0], LEFT);
+    if (value) {
+      value.moveTo([W / 2 - PAD, 0], RIGHT);
+      if (name.right()[0] > value.left()[0] - 0.2) throw new Error(`columns collide: ${f.name} / ${f.value}`);
+    }
+    return { group: new Group(shape, name, ...(value ? [value] : [])), shape, name, value };
   });
-  const name = mono(f.name, fs, f.nameColor, 'start');
-  const value = f.value ? mono(f.value, fs, f.valueColor, 'end') : null;
-  bg.moveTo([0, 0]);
-  name.moveTo([-ROW_W / 2 + 0.34, 0], LEFT);
-  if (value) {
-    value.moveTo([ROW_W / 2 - 0.34, 0], RIGHT);
-    if (name.right()[0] > value.left()[0] - 0.16) throw new Error(`columns collide: ${f.name} / ${f.value}`);
-  }
-  return new Group(bg, name, ...(value ? [value] : []));
-}
-
-function layGrid(fields: Field[], top: number, bottom: number): { frame: Rectangle; rows: Group[] } {
-  const n = fields.length;
-  const rowH = (top - bottom - FORM_PAD * 2 - FORM_GAP * Math.max(0, n - 1)) / n;
-  if (!(rowH > 0.7)) throw new Error(`form row ${rowH.toFixed(2)}`);
-  const fs = formSize(fields, rowH);
+  const stack = new Group(...rows.map((r) => r.group));
+  if (rows.length > 1) stack.arrange(DOWN, 0.14);
   const frame = new Rectangle({
-    width: ROW_W + FORM_PAD * 2, height: top - bottom, cornerRadius: 0.16,
-    stroke: ORANGE, strokeWidth: 0.05, fill: ORANGE, fillOpacity: 0.1,
-  }).moveTo([0, (top + bottom) / 2]);
-  const rows: Group[] = [];
-  let y = top - FORM_PAD;
-  fields.forEach((f, i) => {
-    const row = gridRow(f, rowH, fs);
-    row.moveTo([0, y - rowH / 2]);
-    rows.push(row);
-    y -= rowH;
-    if (i < fields.length - 1) y -= FORM_GAP;
+    width: stack.width() + 0.18, height: stack.height() + 0.18, cornerRadius: 0.14,
+    stroke: ORANGE, strokeWidth: 0.045, strokeOpacity: 0.5,
+    fill: ORANGE, fillOpacity: 0.05,
   });
-  return { frame, rows };
+  frame.moveTo(stack);
+  return { frame, rows, group: new Group(frame, stack) };
 }
 
 function childAnims(from: Group, to: Group): Transform[] {
@@ -363,7 +274,6 @@ export class PlyViewerScene extends Scene {
   }
 
   override async construct(): Promise<void> {
-    if (BAND + ARC_ROOM > PHONE_BAND_GAP) throw new Error('pack gap exceeds the void check');
     const cam = this.frame;
     const TOP = cam.h / 2;
     const BOT = -TOP;
@@ -382,154 +292,229 @@ export class PlyViewerScene extends Scene {
     this.state = st;
 
     const graphic = new Group();
+    graphic.layoutGroup = 'picture';
     const data = new Group();
-    this.add(graphic, data);
+    data.layoutGroup = 'trace';
+    const wires = new Group();
+    this.add(graphic, data, wires);
+
     let code: Group | null = null;
-    let citeT: Text | null = null;
-    const links: Group[] = [];
+    let picture: Group | null = null;
+
+    const traceCeiling = (): number => {
+      const b = data.children.length ? data.box() : null;
+      return b ? b[3] + 0.22 : BOT + 0.28;
+    };
+    const seatDy = (g: Group): number => {
+      if (!code) throw new Error('picture before code');
+      const hi = code.bottom()[1] - 0.2;
+      const lo = traceCeiling();
+      let dy = (hi + lo) / 2 - g.center()[1];
+      if (g.top()[1] + dy > hi) dy = hi - g.top()[1];
+      if (g.bottom()[1] + dy < lo) dy = lo - g.bottom()[1];
+      if (g.top()[1] + dy > hi + 0.04) throw new Error(`picture does not fit under the code (${g.height().toFixed(2)} tall)`);
+      return dy;
+    };
+    const place = (g: Group): void => { g.shift([0, seatDy(g)]); };
+    // x-ranges of `datum` a vertical drop can reach without crossing a sibling above it.
+    const clearSpans = (g: Group, datum: Mobject): Array<[number, number]> => {
+      const db = datum.box();
+      if (!db) return [];
+      const own = new Set(datum.family());
+      const above: Array<[number, number]> = [];
+      for (const m of g.family()) {
+        if (!(m instanceof Rectangle) || own.has(m)) continue;
+        if ((m.style.opacity ?? 1) < 0.5) continue;
+        const b = m.box();
+        if (!b || b[1] < db[3] - 0.05) continue;
+        above.push([b[0], b[2]]);
+      }
+      const margin = 0.16;
+      let spans: Array<[number, number]> = [[db[0] + margin, db[2] - margin]];
+      for (const [x0, x1] of above) {
+        const next: Array<[number, number]> = [];
+        for (const [lo, hi] of spans) {
+          if (x1 <= lo || x0 >= hi) { next.push([lo, hi]); continue; }
+          if (x0 - 0.06 > lo) next.push([lo, x0 - 0.06]);
+          if (x1 + 0.06 < hi) next.push([x1 + 0.06, hi]);
+        }
+        spans = next.filter(([lo, hi]) => hi - lo > 0.15);
+      }
+      return spans;
+    };
+    const alignTo = (g: Group, datum: Mobject, token: Text): void => {
+      const tb = token.box();
+      const db = datum.box();
+      const gb = g.box();
+      if (!tb || !db || !gb) return;
+      const xTok = (tb[0] + tb[2]) / 2;
+      const limit = 7.65;
+      let best: number | null = null;
+      for (const [lo, hi] of clearSpans(g, datum)) {
+        const dxLo = Math.max(xTok - hi, -limit - gb[0]);
+        const dxHi = Math.min(xTok - lo, limit - gb[2]);
+        if (dxLo > dxHi) continue;
+        const dx = dxLo > 0 ? dxLo : dxHi < 0 ? dxHi : 0;
+        if (best == null || Math.abs(dx) < Math.abs(best)) best = dx;
+      }
+      if (best != null) { g.shift([best, 0]); return; }
+      g.shift([xTok - (db[0] + db[2]) / 2, 0]);
+      const b = g.box();
+      if (!b) return;
+      if (b[0] < -limit) g.shift([-limit - b[0], 0]);
+      if (b[2] > limit) g.shift([limit - b[2], 0]);
+    };
 
     const clearLinks = async (): Promise<void> => {
-      if (!links.length) return;
-      const gone = links.splice(0);
-      await this.play(...gone.map((l) => new FadeOut(l)), { runTime: 0.25 });
+      if (!wires.children.length) return;
+      const gone = wires.children.slice();
+      await this.play(...gone.map((l) => new FadeOut(l)), { runTime: 0.2 });
+      wires.remove(...gone);
     };
-    // A short orthogonal stub across the gap between two bands. It leaves the
-    // near edge of the source (the whole code block, when the source is a token
-    // inside it) and meets the facing edge of the target. No gutter loop.
-    const link = async (from: Mobject, to: Mobject, color: string, at?: number): Promise<void> => {
-      const host = code && code.family().includes(from) ? code : from;
-      const a = host.box();
-      const b = to.box();
-      const mark = from.box();
-      if (!a || !b || !mark) throw new Error('connector is missing a box');
-      const ax = at ?? (mark[0] + mark[2]) / 2;
-      const down = (b[1] + b[3]) / 2 <= (a[1] + a[3]) / 2;
-      const x = Math.min(b[2] - 0.2, Math.max(b[0] + 0.2, ax));
-      const yEdge = down ? a[1] - 0.12 : a[3] + 0.12;
-      const yFace = down ? b[3] + 0.1 : b[1] - 0.1;
-      const x0 = Math.min(a[2] - 0.15, Math.max(a[0] + 0.15, ax));
-      const pts: Array<[number, number]> = [[x0, yEdge]];
-      if (Math.abs(x - x0) > 0.04) pts.push([x, yEdge]);
-      pts.push([x, yFace]);
+    const hits = (x: number, y0: number, y1: number, target: Mobject): boolean => {
+      const lo = Math.min(y0, y1), hi = Math.max(y0, y1);
+      const own = new Set(target.family());
+      for (const m of graphic.family()) {
+        if (!(m instanceof Rectangle) || own.has(m)) continue;
+        if ((m.style.opacity ?? 1) < 0.5) continue;
+        const b = m.box();
+        if (!b) continue;
+        if (x <= b[0] + 0.05 || x >= b[2] - 0.05) continue;
+        if (Math.min(b[3], hi) - Math.max(b[1], lo) > 0.05) return true;
+      }
+      return false;
+    };
+    const link = async (token: Text, target: Mobject, color: string, at?: number): Promise<void> => {
+      const mark = token.box();
+      const host = code?.box() ?? null;
+      const tb = target.box();
+      const pb = graphic.box();
+      if (!mark || !host || !tb || !pb) throw new Error('connector is missing a box');
+      const xTok = Math.min(host[2] - 0.15, Math.max(host[0] + 0.15, (mark[0] + mark[2]) / 2));
+      const gapTop = host[1];
+      const gapBot = pb[3];
+      const yRail = gapBot < gapTop - 0.12 ? (gapTop + gapBot) / 2 : gapTop - 0.16;
+      const xMid = Math.min(tb[2] - 0.22, Math.max(tb[0] + 0.22, at ?? (tb[0] + tb[2]) / 2));
+      const xDrop = at == null && xTok > tb[0] + 0.2 && xTok < tb[2] - 0.2 ? xTok : xMid;
+      const yTop = tb[3] + 0.06;
+      const pts: Array<[number, number]> = [];
+      if (!hits(xDrop, yRail, yTop, target)) {
+        pts.push([xTok, yRail]);
+        if (Math.abs(xDrop - xTok) > 0.08) pts.push([xDrop, yRail]);
+        pts.push([xDrop, yTop]);
+      } else {
+        const yRow = (tb[1] + tb[3]) / 2;
+        const sides = [
+          { gutter: Math.max(pb[0] - 0.35, -7.85), xEnter: tb[0] },
+          { gutter: Math.min(pb[2] + 0.35, 7.85), xEnter: tb[2] },
+        ];
+        let best: Array<[number, number]> | null = null;
+        let bestLen = Infinity;
+        for (const side of sides) {
+          if (hits(side.gutter, yRail, yRow, target)) continue;
+          const path: Array<[number, number]> = [[xTok, yRail], [side.gutter, yRail], [side.gutter, yRow], [side.xEnter, yRow]];
+          let along = 0;
+          for (let i = 0; i < path.length - 1; i++) {
+            const p = path[i]!, q = path[i + 1]!;
+            along += Math.hypot(q[0] - p[0], q[1] - p[1]);
+          }
+          if (along < bestLen) { bestLen = along; best = path; }
+        }
+        if (!best) throw new Error(`no clear side for ${JSON.stringify(token.text)}`);
+        pts.push(...best);
+      }
       const lines: Line[] = [];
+      let len = 0;
       for (let i = 0; i < pts.length - 1; i++) {
         const p = pts[i]!, q = pts[i + 1]!;
-        if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 0.02) continue;
-        lines.push(new Line(p, q, { stroke: color, strokeWidth: 0.05 }));
+        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (d < 0.02) continue;
+        len += d;
+        lines.push(new Line(p, q, { stroke: color, strokeWidth: 0.045 }));
       }
+      if (len > PHONE_CONNECTOR_MAX) throw new Error(`connector ${len.toFixed(2)} from ${JSON.stringify(token.text)}`);
       if (!lines.length) return;
       const path = new Group(...lines);
-      links.push(path);
+      wires.add(path);
       await this.play(new Create(path, { lagRatio: 0 }), { runTime: 0.35 });
     };
+
     const swapCode = async (
       file: string, line: number, source: string, token: string, color: string,
       alongside?: () => Transform[],
     ): Promise<Text> => {
       await clearLinks();
-      const nextCite = mono(`${file}:${line}`, 0.5, DIM, 'start');
-      nextCite.moveTo([INK_LEFT, TOP - EDGE], UL);
-      const next = buildLine(source, token, color, nextCite.bottom()[1] - 0.28);
+      const cite = mono(`${file}:${line}`, FS, DIM, 'start');
+      cite.moveTo([INK_LEFT, TOP - 0.32], UL);
+      const lines = fitCode(source, token, FS, MAX_W);
+      const rows: Group[] = [];
+      let tok: Text | null = null;
+      let y = cite.bottom()[1] - 0.2;
+      for (const lineText of lines) {
+        const i = lineText.indexOf(token);
+        const parts: Text[] = [];
+        if (i < 0) parts.push(mono(lineText, FS, DIM, 'start'));
+        else {
+          if (i > 0) parts.push(mono(lineText.slice(0, i), FS, DIM, 'start'));
+          const t = mono(token, FS, color, 'start');
+          parts.push(t);
+          tok = t;
+          const rest = lineText.slice(i + token.length);
+          if (rest) parts.push(mono(rest, FS, DIM, 'start'));
+        }
+        let x = 0;
+        for (const p of parts) { p.moveTo([x, 0], LEFT); x += p.advance(); }
+        const row = new Group(...parts);
+        row.moveTo([INK_LEFT, y], UL);
+        rows.push(row);
+        y = row.bottom()[1] - 0.2;
+      }
+      if (!tok) throw new Error(`token ${token} missing after layout`);
+      const next = new Group(cite, ...rows);
+      next.layoutGroup = 'code';
       const out: FadeOut[] = [];
       if (code) out.push(new FadeOut(code));
-      if (citeT) out.push(new FadeOut(citeT));
-      if (out.length) await this.play(...out, { runTime: 0.25 });
-      code = next.group;
-      citeT = nextCite;
+      if (out.length) await this.play(...out, { runTime: 0.22 });
+      code = next;
       const extra = alongside?.() ?? [];
-      await this.play(new FadeIn(code), new FadeIn(citeT), ...extra, { runTime: 0.4 });
-      return next.token;
+      await this.play(new FadeIn(code), ...extra, { runTime: 0.35 });
+      return tok;
     };
+
     const clearGraphic = async (): Promise<void> => {
       await clearLinks();
-      if (!graphic.children.length) return;
-      await this.play(new FadeOut(graphic), { runTime: 0.28 });
+      if (!graphic.children.length) { picture = null; return; }
+      await this.play(new FadeOut(graphic), { runTime: 0.25 });
       graphic.remove(...graphic.children.slice());
+      picture = null;
       this.add(graphic);
     };
-    const depart = async (token: Text, to: Readonly<[number, number]>, opts: { text?: string; color?: string; scale?: number } = {}): Promise<{ flown: Text; home: Text }> => {
-      const parent = token.parent;
-      const home = token.copy();
-      const target = token.copy();
-      if (opts.text) target.setText(opts.text);
-      if (opts.color) target.setFill(opts.color);
-      if (opts.scale && opts.scale !== 1) target.scale(opts.scale);
-      target.moveTo(to);
-      const d = Math.hypot(to[0] - token.center()[0], to[1] - token.center()[1]);
-      await this.play(new Transform(token, target), { runTime: glide(d) });
-      graphic.add(token);
-      if (parent) {
-        await this.play(new FadeIn(home), { runTime: 0.25 });
-        this.remove(home);
-        parent.add(home);
-      }
-      return { flown: token, home };
-    };
-    const pictureTop = (): number => {
-      if (!code) throw new Error('picture before code');
-      return code.bottom()[1] - BAND;
-    };
-    const reveal = async (cells: Cell[], extra: Mobject[] = []): Promise<void> => {
-      const groups = cells.map((c) => c.group);
-      graphic.add(...extra, ...groups);
-      await this.play(
-        ...extra.map((m) => new FadeIn(m, { runTime: 0.3 })),
-        new LaggedStart(groups.map((g) => new FadeIn(g, { runTime: 0.28 })), { lagRatio: 0.07 }),
-        { runTime: 0.7 },
-      );
-    };
-    const land = async (token: Text, cell: Cell, color: string): Promise<{ flown: Text; home: Text }> => {
-      const slot = cell.landing;
-      if (!slot) throw new Error('nothing to land on');
-      const done = await depart(token, slot.at, { text: slot.text, color, scale: slot.fs / FS });
-      // The word belongs to the band it landed on, so a later reseat carries it.
-      cell.group.add(done.flown);
-      cell.texts.push(done.flown);
-      return done;
+
+    const reveal = async (g: Group, datum?: Mobject, token?: Text): Promise<void> => {
+      picture = g;
+      graphic.add(g);
+      place(g);
+      if (datum && token) alignTo(g, datum, token);
+      await this.play(new LaggedStart(g.children.map((c) => new FadeIn(c, { runTime: 0.26 })), { lagRatio: 0.05 }), { runTime: 0.65 });
     };
 
-    const STATE_FS = 0.92;
-    const pinState = (text: string, color: string): Text => {
-      const t = mono(text, STATE_FS, color);
-      t.moveTo([0, BOT + EDGE + t.height() / 2]);
-      return t;
-    };
-
-    // Trace bars stack upward. One caption each, on the bar. The newest bar is the one the picture meets.
-    const bx0 = -TILE_W / 2;
-    const bScale = (TILE_W - 0.5) / 505;
-    const barH = 1.25;
-    const capGap = 0.12;
-    const CAP = fitSize('400 filter not allowed · 443 ms', TILE_W - 0.4, 0.8);
-    const capH = mono('400 filter not allowed · 443 ms', CAP, RED).height();
-    const barPitch = barH + capGap + capH + 0.28;
-    const barCenter = (index: number): number => BOT + EDGE + capH + capGap + barH / 2 + index * barPitch;
-    const aboveTrace = (n: number): number => barCenter(n - 1) + barH / 2 + BAND;
-    /** Where the picture ends before the next bar exists: on the bezel, or just above the bars already drawn. */
-    const traceFloor = (): number => barGroups.length === 0 ? BOT + EDGE : aboveTrace(barGroups.length);
-    const barGroups: Group[] = [];
-    const growBar = async (
-      ms: number, start: number, color: string, name: string, lift?: Cell[],
-    ): Promise<{ group: Group; bar: Rectangle; caption: Text }> => {
-      const y = barCenter(barGroups.length);
-      const w = Math.max(0.4, ms * bScale);
-      const full = new Rectangle({ width: w, height: barH, fill: color, fillOpacity: 0.94, stroke: 'none' });
-      full.moveTo([bx0, y], LEFT);
-      const bar = full.copy();
-      bar.stretch(0.08 / w, 0, { aboutEdge: LEFT });
-      const g = new Group(bar);
+    const BAR_MAX = 13.4;
+    const pushBar = async (ms: number, start: number, color: string, caption: string): Promise<{ bar: Rectangle; caption: Text }> => {
+      const w = Math.max(0.5, (ms / 505) * BAR_MAX);
+      const bar = new Rectangle({ width: w, height: 0.7, fill: color, fillOpacity: 0.94, stroke: 'none' });
+      bar.measures = true;
+      const cap = mono(caption, LABEL, color, 'start');
+      bar.moveTo([0, 0], LEFT);
+      cap.nextTo(bar, DOWN, 0.1, LEFT);
+      const g = new Group(bar, cap);
+      const yBottom = data.children.length && data.box() ? data.box()![3] + 0.16 : BOT + 0.26;
+      g.shift([0, yBottom - g.bottom()[1]]);
+      g.shift([-BAR_MAX / 2 - bar.left()[0], 0]);
       data.add(g);
-      barGroups.push(g);
-      // Open the slot and show the bar in one gesture, so the band never rests empty.
-      const liftAnims = lift?.length ? reseatCellAnims(lift, pictureTop(), y + barH / 2 + BAND, TILE_W) : [];
-      await this.play(new FadeIn(bar), ...liftAnims, { runTime: 0.4 });
-      await this.play(new Transform(bar, full), { runTime: 0.65, rateFunc: linear });
-      const caption = mono(name, CAP, color, 'start');
-      caption.moveTo([bx0, y - barH / 2 - capGap - caption.height() / 2], LEFT);
-      g.add(caption);
-      await this.play(new FadeIn(caption), { runTime: 0.22 });
       st.clockMs = start + ms;
-      return { group: g, bar, caption };
+      const lift = picture ? picture.animate.shift([0, seatDy(picture)]) : null;
+      await this.play(new FadeIn(g), ...(lift ? [lift] : []), { runTime: 0.4 });
+      return { bar, caption: cap };
     };
 
     // ---- url -----------------------------------------------------------------
@@ -539,23 +524,24 @@ export class PlyViewerScene extends Scene {
       '  if (OWNER_REPO.test(text)) return { remote: `https://github.com/${text}` };',
       'github.com', TEAL,
     );
-    const remote = pinState('remote  github.com', TEAL);
-    const urlCells = stack([
-      { ...word('github.com', TEAL), blank: true },
-      word('/view/', GOLD),
-      word('octocat', INK),
-      word('Hello-World', INK),
-    ], pictureTop(), remote.top()[1] + BAND);
-    await reveal(urlCells, [remote]);
-    const { home: urlHome } = await land(urlTok, urlCells[0]!, WHITE);
+    const remote = mono('remote  github.com', LABEL, TEAL);
+    remote.moveTo([0, BOT + 0.28 + remote.height() / 2]);
+    data.add(remote);
+    await this.play(new FadeIn(remote), { runTime: 0.25 });
+    const urlHost = chip([[{ text: 'github.com', color: WHITE }]], TEAL);
+    const urlPicture = pile([
+      urlHost,
+      chip([[{ text: '/view/', color: GOLD }]], GOLD),
+      chip([[{ text: 'octocat', color: INK }]], DIM),
+      chip([[{ text: 'Hello-World', color: INK }]], DIM),
+    ]);
+    await reveal(urlPicture, urlHost, urlTok);
     st.url = '/view/github.com/octocat/Hello-World';
-    await link(urlHome, urlCells[0]!.shape, TEAL);
+    await link(urlTok, urlHost, TEAL);
     await this.wait(0.35);
 
     // ---- allow ---------------------------------------------------------------
     await this.step('allow', { caption: 'Exact match only. A trailing dot is a different host.', file: 'worker/viewer/url.ts', line: 79 });
-    graphic.remove(remote);
-    this.add(remote);
     await clearGraphic();
     const allowTok = await swapCode(
       'worker/viewer/url.ts', 79,
@@ -563,29 +549,34 @@ export class PlyViewerScene extends Scene {
       'item === host', TEAL,
     );
     const hostNames = ['github.com', 'gitlab.com', 'codeberg.org', 'bitbucket.org', 'git.sr.ht', 'github.com.'] as const;
-    let hosts = stack(hostNames.map((n, i) => word(n, i === 0 ? TEAL : i === hostNames.length - 1 ? RED : DIM, i === hostNames.length - 1 ? RED : WHITE)), pictureTop(), remote.top()[1] + BAND);
-    await reveal(hosts);
-    const gh = hosts[0]!;
-    gh.shape.setStyle({ stroke: TEAL, fill: TEAL, fillOpacity: 0.72 });
-    st.host = 'github.com';
-    const kept = hosts.slice(0, 5);
-    const bad = hosts[5]!;
+    const hostChips = hostNames.map((n, i) => chip(
+      [[{ text: n, color: i === hostNames.length - 1 ? RED : WHITE }]],
+      i === 0 ? TEAL : i === hostNames.length - 1 ? RED : DIM,
+    ));
+    let hosts = pile(hostChips);
+    await reveal(hosts, hostChips[0]!, allowTok);
+    const kept = hostChips.slice(0, 5);
+    const bad = hostChips[5]!;
+    const nextHosts = pile(kept.map((c) => c.copy()));
+    place(nextHosts);
+    alignTo(nextHosts, nextHosts.children[0]!, allowTok);
     await this.play(
-      new FadeOut(bad.group),
-      ...reseatCellAnims(kept, pictureTop(), remote.top()[1] + BAND, TILE_W),
-      { runTime: 0.5 },
+      new FadeOut(bad),
+      ...kept.map((c, i) => new Transform(c, nextHosts.children[i]!)),
+      { runTime: 0.45 },
     );
-    hosts = kept;
-    await link(allowTok, gh.shape, TEAL);
-    const hostLine = pinState('host  github.com', TEAL);
-    await this.play(new Transform(remote, hostLine), { runTime: 0.4 });
-    this.remove(remote);
-    graphic.add(remote);
+    hosts.remove(bad);
+    st.host = 'github.com';
+    await link(allowTok, hostChips[0]!, TEAL);
+    const hostLine = mono('host  github.com', LABEL, TEAL);
+    hostLine.moveTo(remote);
+    await this.play(new Transform(remote, hostLine), { runTime: 0.35 });
     await this.wait(0.35);
 
     // ---- strip ---------------------------------------------------------------
     await this.step('strip', { caption: 'Credentials leave the request. User-Agent is forced.', file: 'worker/viewer/fetchguard.ts', line: 18 });
     await clearGraphic();
+    await this.play(new FadeOut(remote), { runTime: 0.2 });
     await swapCode(
       'worker/viewer/fetchguard.ts', 18,
       '    if (ALLOWED.has(key.toLowerCase())) out.set(key, value);',
@@ -600,75 +591,77 @@ export class PlyViewerScene extends Scene {
       { name: 'git-protocol', value: 'version=2', nameColor: TEAL, valueColor: INK, credential: false },
       { name: 'user-agent', value: '<client>', nameColor: INK, valueColor: DIM, credential: false },
     ];
-    const bandTop = pictureTop();
-    const bandBot = BOT + EDGE;
-    let grid = layGrid(fields, bandTop, bandBot);
+    let form = layForm(fields);
     let live = fields.slice();
-    const sheet = new Group(grid.frame, ...grid.rows);
+    const sheet = form.group;
+    picture = sheet;
     graphic.add(sheet);
-    await this.play(new LaggedStart([grid.frame, ...grid.rows].map((m) => new FadeIn(m, { runTime: 0.26 })), { lagRatio: 0.07 }), { runTime: 0.75 });
-    await link(code!.children.flatMap((r) => r.children).find((m) => m instanceof Text && m.text === 'ALLOWED.has') as Text, grid.frame, ORANGE);
+    place(sheet);
+    await this.play(new LaggedStart([form.frame, ...form.rows.map((r) => r.group)].map((m) => new FadeIn(m, { runTime: 0.24 })), { lagRatio: 0.06 }), { runTime: 0.7 });
+    const allowHit = code!.family().find((m) => m instanceof Text && m.text === 'ALLOWED.has');
+    if (!(allowHit instanceof Text)) throw new Error('ALLOWED.has');
+    await link(allowHit, form.frame, ORANGE);
     await clearLinks();
     const dropped: string[] = [];
     for (const spec of fields.filter((f) => f.credential)) {
       const idx = live.indexOf(spec);
-      const row = grid.rows[idx]!;
-      const stayRows = grid.rows.filter((_, i) => i !== idx);
+      const row = form.rows[idx]!;
       const stay = live.filter((f) => f !== spec);
-      const next = layGrid(stay, bandTop, bandBot);
+      const next = layForm(stay);
+      next.group.moveTo([sheet.center()[0], 0]);
+      next.group.shift([0, sheet.top()[1] - next.group.top()[1]]);
+      const stayRows = form.rows.filter((_, i) => i !== idx);
       await this.play(
-        new FadeOut(row),
-        new Transform(grid.frame, next.frame),
-        ...stayRows.flatMap((r, i) => childAnims(r, next.rows[i]!)),
-        { runTime: 0.5 },
+        new FadeOut(row.group),
+        new Transform(form.frame, next.frame),
+        ...stayRows.flatMap((r, i) => childAnims(r.group, next.rows[i]!.group)),
+        { runTime: 0.42 },
       );
-      grid.rows = stayRows;
+      form = { frame: form.frame, rows: stayRows, group: sheet };
       live = stay;
       dropped.push(spec.name);
       st.dropped = dropped.join(' ');
     }
-    const n1 = live.length;
-    const n2 = dropped.length + 1;
-    const between = 0.32;
-    const rowH = (bandTop - bandBot - between - FORM_PAD * 4 - FORM_GAP * (n1 + n2 - 2)) / (n1 + n2);
-    const headerH = FORM_PAD * 2 + n1 * rowH + FORM_GAP * (n1 - 1);
-    const header = layGrid(live, bandTop, bandTop - headerH);
-    const stripTop = bandTop - headerH - between;
-    const lowerH = FORM_PAD * 2 + n2 * rowH + FORM_GAP * (n2 - 1);
-    const stripped = layGrid(
-      [{ name: 'stripped', value: '', nameColor: DIM, valueColor: DIM, credential: false },
-        ...dropped.map((name) => ({ name, value: '', nameColor: ORANGE, valueColor: ORANGE, credential: false }))],
-      stripTop, stripTop - lowerH,
-    );
-    const strippedGroup = new Group(stripped.frame, ...stripped.rows);
-    sheet.add(strippedGroup);
-    await this.play(
-      new Transform(grid.frame, header.frame),
-      ...grid.rows.flatMap((r, i) => childAnims(r, header.rows[i]!)),
-      new FadeIn(strippedGroup),
-      { runTime: 0.55 },
-    );
+    const strippedChips = [
+      chip([[{ text: 'stripped', color: DIM }]], DIM),
+      ...dropped.map((name) => chip([[{ text: name, color: ORANGE }]], ORANGE)),
+    ];
+    const stripped = pile(strippedChips, 'left');
+    stripped.nextTo(sheet, DOWN, 0.2, LEFT);
+    graphic.add(stripped);
+    await this.play(new FadeIn(stripped), { runTime: 0.35 });
+    const holder = new Group(sheet, stripped);
+    graphic.add(holder);
     const uaTok = await swapCode(
       'worker/viewer/fetchguard.ts', 20,
       "  out.set('user-agent', VIEWER_UA);",
       'VIEWER_UA', GOLD,
       () => {
-        const dy = (code!.bottom()[1] - BAND) - sheet.top()[1];
-        if (Math.abs(dy) < 0.05) return [];
-        const moved = sheet.copy();
+        const dy = seatDy(holder);
+        if (Math.abs(dy) < 0.04) return [];
+        const moved = holder.copy();
         moved.shift([0, dy]);
-        return [new Transform(sheet, moved)];
+        return [new Transform(holder, moved)];
       },
     );
-    const uaRow = grid.rows[live.length - 1]!;
-    const uaValue = uaRow.children[2];
-    if (!(uaValue instanceof Text)) throw new Error('user-agent value');
+    const uaRow = form.rows[live.length - 1]!;
+    const uaValue = uaRow.value;
+    if (!uaValue) throw new Error('user-agent value');
     const uaNext = uaValue.copy();
     uaNext.setText('ply-viewer/0.1.0');
     uaNext.setFill(GOLD);
-    uaNext.moveTo([ROW_W / 2 - 0.34, uaValue.center()[1]], RIGHT);
-    await this.play(new Transform(uaValue, uaNext), { runTime: 0.4 });
-    await link(uaTok, grid.frame, GOLD);
+    await this.play(new Transform(uaValue, uaNext), { runTime: 0.35 });
+    // The forced header is the datum, so it moves to the top of the card where the line can meet it.
+    const above = form.rows.slice(0, -1);
+    let y = above[0] ? above[0].group.top()[1] : uaRow.group.top()[1];
+    const liftRows: Array<ReturnType<Group['animate']['shift']>> = [];
+    for (const row of [uaRow, ...above]) {
+      const dy = y - row.group.top()[1];
+      if (Math.abs(dy) > 0.02) liftRows.push(row.group.animate.shift([0, dy]));
+      y -= row.group.height() + 0.14;
+    }
+    if (liftRows.length) await this.play(...liftRows, { runTime: 0.4 });
+    await link(uaTok, uaRow.shape, GOLD);
     await this.wait(0.35);
 
     // ---- refs ----------------------------------------------------------------
@@ -679,20 +672,22 @@ export class PlyViewerScene extends Scene {
       '  const listedRefs = await listRefs(transport, refPrefixes(route.ref));',
       'refPrefixes', TEAL,
     );
-    const refCells = stack([
-      pktRow('command=ls-refs\n', INK),
-      pktRow('', GOLD, '0001'),
-      pktRow('peel\n', DIM),
-      pktRow('symrefs\n', DIM),
-      pktRow('ref-prefix HEAD\n', TEAL),
-      pktRow('ref-prefix refs/heads/\n', TEAL),
-      pktRow('', GOLD, '0000'),
-    ], pictureTop(), traceFloor());
-    await reveal(refCells);
+    const refHead = pktChip('ref-prefix HEAD\n', TEAL);
+    const refHeads = pktChip('ref-prefix refs/heads/\n', TEAL);
+    const refPicture = pile([
+      pktChip('command=ls-refs\n', INK),
+      pktChip('', GOLD, '0001'),
+      pktChip('peel\n', DIM),
+      pktChip('symrefs\n', DIM),
+      refHead,
+      refHeads,
+      pktChip('', GOLD, '0000'),
+    ], 'left');
+    // refPrefixes writes both lines. The heads line is the one a vertical drop can meet.
+    await reveal(refPicture, refHeads, refTok);
     st.pkt = '0014command=ls-refs 0001 0009peel 000csymrefs 0014ref-prefix HEAD 001bref-prefix refs/heads/ 0000';
-    const refsBar = await growBar(438, 0, TEAL, 'ls-refs · 438 ms', refCells);
-    await link(refTok, refCells[0]!.shape, TEAL);
-    await link(refCells[refCells.length - 1]!.shape, refsBar.bar, TEAL);
+    await pushBar(438, 0, TEAL, 'ls-refs · 438 ms');
+    await link(refTok, refHeads, TEAL);
     await this.wait(0.35);
 
     // ---- fetch ---------------------------------------------------------------
@@ -703,25 +698,18 @@ export class PlyViewerScene extends Scene {
       "  const commitObj = await readObject(transport, { oid: resolved.commit, filter: 'tree:0', deepen: 1, expectType: TYPE.COMMIT });",
       "filter: 'tree:0'", GREEN,
     );
-    const fetchCells = stack([
-      { ...word(`${pktLine('filter tree:0\n').hex} filter tree:0`, GREEN), blank: true },
-      word('deepen 1', GREEN),
-      word('expectType', INK),
-      word('TYPE.COMMIT', BLUE),
-      word('resolved.commit', BLUE),
-    ], pictureTop(), traceFloor());
-    await reveal(fetchCells);
-    const { home: treeHome } = await land(fetchTok, fetchCells[0]!, WHITE);
-    const treeBar = await growBar(443, 438, GREEN, 'tree:0 · 443 ms', fetchCells);
+    const fetchPicture = fetchColumn('tree:0');
+    await reveal(fetchPicture.group, fetchPicture.filter, fetchTok);
+    const treeBar = await pushBar(443, 438, GREEN, 'tree:0 · 443 ms');
     const redBar = treeBar.bar.copy();
     redBar.setFill(RED);
-    const denied = mono('400 filter not allowed · 443 ms', CAP, RED, 'start');
-    denied.moveTo(treeBar.caption, LEFT);
-    await this.play(new Transform(treeBar.bar, redBar), new Transform(treeBar.caption, denied), { runTime: 0.5 });
+    const denied = treeBar.caption.copy();
+    denied.setText('400 filter not allowed · 443 ms');
+    denied.setFill(RED);
+    await this.play(new Transform(treeBar.bar, redBar), new Transform(treeBar.caption, denied), { runTime: 0.45 });
     st.filter = 'tree:0';
     st.http = 400;
-    await link(treeHome, fetchCells[0]!.shape, GREEN);
-    await link(fetchCells[fetchCells.length - 1]!.shape, treeBar.bar, RED);
+    await link(fetchTok, fetchPicture.filter, GREEN);
     await this.wait(0.35);
 
     // ---- retry ---------------------------------------------------------------
@@ -732,19 +720,12 @@ export class PlyViewerScene extends Scene {
       "    if (t.quirks) t.quirks.treeFilter = 'blob:none';",
       'blob:none', TEAL,
     );
-    const retryCells = stack([
-      { ...word(`${pktLine('filter blob:none\n').hex} filter blob:none`, TEAL), blank: true },
-      word('quirks.treeFilter', TEAL),
-      word('blob:none', TEAL),
-      word('t.quirks', INK),
-    ], pictureTop(), traceFloor());
-    await reveal(retryCells);
-    const { home: blobHome } = await land(retryTok, retryCells[0]!, WHITE);
-    const blobBar = await growBar(505, 881, TEAL, '200 · blob:none · 505 ms', retryCells);
+    const retryPicture = fetchColumn('blob:none');
+    await reveal(retryPicture.group, retryPicture.filter, retryTok);
+    await pushBar(505, 881, TEAL, '200 · blob:none · 505 ms');
     st.filter = 'blob:none';
     st.http = 200;
-    await link(blobHome, retryCells[0]!.shape, TEAL);
-    await link(retryCells[retryCells.length - 1]!.shape, blobBar.bar, TEAL);
+    await link(retryTok, retryPicture.filter, TEAL);
     await this.wait(0.35);
 
     // ---- pack ----------------------------------------------------------------
@@ -755,48 +736,41 @@ export class PlyViewerScene extends Scene {
       '    const offset = p;',
       'offset', BLUE,
     );
-    const packTop = pictureTop() - ARC_ROOM;
-    const packY = packTop - PACK_H / 2;
-    const x0 = -TILE_W / 2;
-    const segs: Rectangle[] = [];
-    for (const [off, len, fill] of PACK) {
-      const w = Math.max(0.08, (len / PACK_BYTES) * TILE_W);
-      const rect = new Rectangle({ width: w, height: PACK_H, fill, fillOpacity: 0.94, stroke: 'none' });
-      rect.moveTo([x0 + (off / PACK_BYTES) * TILE_W, packY], LEFT);
-      segs.push(rect);
-    }
-    const packBar = new Group(...segs);
-    const legendBottom = aboveTrace(barGroups.length);
-    const legend = stack([
-      { ...word('930 B · 9 objects', DIM, DIM), wash: 0.2 },
-      { ...word('@12 · 371 B · commit', BLUE, WHITE), wash: 0.45 },
-      { ...word('@383 · 183 B · ref-delta', RED, WHITE), wash: 0.45 },
-      { ...word('@566 · 108 B · tree', GREEN, WHITE), wash: 0.45 },
-    ], packTop - PACK_H - TILE_GAP, legendBottom);
-    await reveal(legend, [packBar]);
-    const pack = {
-      bar: packBar, legend, arc: null as CurvedArrow | null,
-      barTop: packTop, legendBottom, segs,
+    const barW = 13.2;
+    const packH = 0.9;
+    const x0 = -barW / 2;
+    const slices: Rectangle[] = [];
+    const paint = (offset: number, length: number, fill: string, key: string): void => {
+      const w = Math.max(0.05, (length / PACK_BYTES) * barW);
+      const rect = new Rectangle({ width: w, height: packH, fill, fillOpacity: 0.94, stroke: 'none' });
+      rect.measures = true;
+      rect.key = key;
+      rect.moveTo([x0 + (offset / PACK_BYTES) * barW, 0], LEFT);
+      slices.push(rect);
     };
-    st.pack = '930 B @12 371 @383 183 @566 108';
-    // Left rim of the commit slice. The ref-delta arc lands on the right rim, so the two never share a column.
-    await link(offTok, segs[1]!, BLUE, segs[1]!.left()[0] + 0.35);
+    paint(0, PACK_HEADER, '#5c5c5c', 'pack:header');
+    for (const obj of PACK_OBJECTS) paint(obj.offset, obj.length, kindColor(obj.kind), `pack:${obj.offset}`);
+    paint(PACK_BYTES - PACK_TRAILER, PACK_TRAILER, '#5c5c5c', 'pack:trailer');
+    const packBar = new Group(...slices);
+    const legend = pile([
+      chip([[{ text: `${PACK_BYTES} B · ${PACK_OBJECTS.length} objects`, color: DIM }]], DIM),
+      chip([[{ text: legendText(commitObj), color: WHITE }]], BLUE),
+      chip([[{ text: legendText(refDelta), color: RED }]], RED),
+      chip([[{ text: legendText(treeObj), color: WHITE }]], GREEN),
+    ], 'left');
+    legend.nextTo(packBar, DOWN, 0.2, LEFT);
+    const pack = new Group(packBar, legend);
+    await reveal(pack);
+    st.pack = `${PACK_BYTES} B @${commitObj.offset} ${commitObj.length} @${refDelta.offset} ${refDelta.length} @${treeObj.offset} ${treeObj.length}`;
+    const commitSlice = slices.find((s) => s.key === `pack:${commitObj.offset}`)!;
+    await link(offTok, commitSlice, BLUE);
     const reseatPack = (): Transform[] => {
-      const newBarTop = code!.bottom()[1] - BAND - ARC_ROOM;
-      const D = pack.barTop - newBarTop;
-      if (Math.abs(D) < 0.04) return [];
-      const anims: Transform[] = [];
-      const moved = pack.bar.copy();
-      moved.shift([0, -D]);
-      anims.push(new Transform(pack.bar, moved));
-      if (pack.arc) {
-        const arcNext = pack.arc.copy();
-        arcNext.shift([0, -D]);
-        anims.push(new Transform(pack.arc, arcNext));
-      }
-      anims.push(...reseatCellAnims(pack.legend, newBarTop - PACK_H - TILE_GAP, pack.legendBottom, TILE_W));
-      pack.barTop = newBarTop;
-      return anims;
+      if (!picture) return [];
+      const dy = seatDy(picture);
+      if (Math.abs(dy) < 0.04) return [];
+      const moved = picture.copy();
+      moved.shift([0, dy]);
+      return [new Transform(picture, moved)];
     };
     await this.wait(0.35);
 
@@ -808,36 +782,23 @@ export class PlyViewerScene extends Scene {
       'baseOid', RED,
       reseatPack,
     );
-    const baseTop = segs[2]!.top();
-    const commitTop = segs[1]!.top();
+    const refSlice = slices.find((s) => s.key === `pack:${refDelta.offset}`)!;
     const arc = new CurvedArrow(
-      [segs[2]!.center()[0], baseTop[1] + 0.18],
-      [segs[1]!.center()[0], commitTop[1] + 0.18],
-      { angle: Math.PI / 7, stroke: RED, strokeWidth: 0.05, tipLength: 0.2, tipWidth: 0.14 },
+      [refSlice.center()[0], refSlice.top()[1] + 0.16],
+      [commitSlice.center()[0], commitSlice.top()[1] + 0.16],
+      { angle: Math.PI / 7, stroke: RED, strokeWidth: 0.045, tipLength: 0.18, tipWidth: 0.12 },
     );
-    pack.arc = arc;
-    graphic.add(arc);
-    await this.play(new Create(arc), { runTime: 0.7 });
-    await link(baseTok, segs[2]!, RED, segs[2]!.right()[0] - 0.35);
+    pack.add(arc);
+    await this.play(new Create(arc), { runTime: 0.6 });
+    await link(baseTok, refSlice, RED, refSlice.right()[0] - 0.18);
     const applyTok = await swapCode(
       'src/packresolve.js', 154,
       '      const { out, ops } = applyDelta(base.data, obj.data, { maxResult: limits.maxDeltaResult });',
       'applyDelta', BLUE,
       reseatPack,
     );
-    const refLabel = legend[2]!.texts[0]!;
-    const resolved = refLabel.copy();
-    resolved.setText('@383 · 183 B · commit');
-    resolved.setFill(WHITE);
-    resolved.moveTo(refLabel.center());
-    await this.play(
-      segs[2]!.animate.setFill(BLUE),
-      legend[2]!.shape.animate.setFill(BLUE).setStroke(BLUE),
-      new Transform(refLabel, resolved),
-      { runTime: 0.55 },
-    );
-    st.delta = '@383 -> @12 chain 1';
-    await link(applyTok, segs[2]!, BLUE, segs[2]!.right()[0] - 0.35);
+    await link(applyTok, commitSlice, BLUE, commitSlice.left()[0] + 0.28);
+    st.delta = `@${refDelta.offset} -> @${commitObj.offset} chain 1`;
     await this.wait(0.35);
 
     // ---- trace ---------------------------------------------------------------
@@ -848,16 +809,14 @@ export class PlyViewerScene extends Scene {
       '  async span(name, opts, fn) {',
       'span', GOLD,
     );
-    const traceCells = stack([
-      word('3 upstream calls', GOLD),
-      word('ls-refs · 438 ms', TEAL),
-      word('tree:0 · 443 ms', RED),
-      word('blob:none · 505 ms', TEAL),
-      word('1 retry · 1.4 s', GOLD),
-    ], pictureTop(), aboveTrace(barGroups.length));
-    await reveal(traceCells);
-    await link(spanTok, traceCells[0]!.shape, GOLD);
-    await link(traceCells[traceCells.length - 1]!.shape, blobBar.bar, TEAL);
+    const spanLead = chip([[{ text: 'ls-refs · 438 ms', color: TEAL }]], TEAL);
+    const tracePicture = pile([
+      spanLead,
+      chip([[{ text: '400 · tree:0 · 443 ms', color: RED }]], RED),
+      chip([[{ text: '200 · blob:none · 505 ms', color: TEAL }]], TEAL),
+    ]);
+    await reveal(tracePicture, spanLead, spanTok);
+    await link(spanTok, spanLead, GOLD);
     await this.wait(0.35);
 
     // ---- pipeline ------------------------------------------------------------
@@ -868,18 +827,18 @@ export class PlyViewerScene extends Scene {
       '  const quirks: Quirks = {};',
       'quirks', WHITE,
     );
-    const stageCells = stack([
-      word('github.com', TEAL),
-      word('strip', ORANGE),
-      word('ls-refs', TEAL),
-      word('400', RED),
-      word('200', TEAL),
-      word('@12', BLUE),
-      word('1.4 s', GOLD),
-    ], pictureTop(), aboveTrace(barGroups.length));
-    await reveal(stageCells);
-    await link(endTok, stageCells[0]!.shape, WHITE);
-    await link(stageCells[stageCells.length - 1]!.shape, blobBar.bar, GOLD);
+    const retryChip = chip([[{ text: '400', color: WHITE }]], RED);
+    const stagePicture = pile([
+      chip([[{ text: 'github.com', color: WHITE }]], TEAL),
+      chip([[{ text: 'strip', color: WHITE }]], ORANGE),
+      chip([[{ text: 'ls-refs', color: WHITE }]], TEAL),
+      retryChip,
+      chip([[{ text: '200', color: WHITE }]], TEAL),
+      chip([[{ text: `@${commitObj.offset}`, color: WHITE }]], BLUE),
+      chip([[{ text: '1.4 s', color: INK }]], GOLD),
+    ]);
+    await reveal(stagePicture);
+    await link(endTok, retryChip, RED);
     await this.wait(0.35);
   }
 }
