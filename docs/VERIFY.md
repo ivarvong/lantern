@@ -83,6 +83,11 @@ scenes: intermediate morph shapes move by up to 0.24 units; endpoints are unchan
 | handoff | a replacement lands somewhere other than what it replaced |
 | ghost | two texts overlap while both opacities are between 0.12 and 0.88 (a crossfade; outgoing text must finish before the next text starts) |
 | overflow | a label whose center lies inside its shape extends more than 0.04 past that shape (text is centered on its advance box, so a label no longer needs a hand-tuned baseline offset) |
+| pierce | a connector (a line, a polyline, or an open arc) crosses a glyph run or comes within 0.05 of one, or enters a box or another connector's arc, anywhere but its own two ends. A stair of short pieces is one connector; the end pad does not apply to the joints |
+| fill | a bare rectangle's text sits in one corner of it. A `Labeled` shape is exempt: its label is placed by the layout, centered or pinned as a title. A cluster that holds other boxes is exempt |
+| overlap | two resting texts, or a text and a box, or two boxes, occupy the same space. Containment is a layout, not a collision. `allowOverlap` declares a deliberate exception |
+| margin | two resting texts in a column are closer than 0.03. Glyphs that abut on one baseline are a line, not a crush |
+| intrude | a moving text that belongs to no box crosses a label inside a rectangle. A value landing in an empty slot is that slot. A token flying through a card's rows is not |
 
 A `Text` is tracked as one unit: its glyphs are rebuilt when the string changes, so
 per-glyph identity means nothing there. Each event names the step, time and leaf

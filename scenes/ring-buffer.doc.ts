@@ -25,7 +25,7 @@ const slots = new Array<string | null>(CAP).fill(null);
 
 function push(v: string, color: string): void {
   const ops: DocStep['ops'] = [
-    [{ focus: 2 }, { add: { id: `v${v}`, kind: 'value', label: v, at: [slotX(tail), -0.4] } }],
+    [{ focus: 2 }, { add: { id: `v${v}`, kind: 'value', label: v, at: [-7.15, 1.2] } }],
     [{ move: { id: `v${v}`, at: `s${tail}` } }, { style: { id: `s${tail}`, color } }],
   ];
   slots[tail] = v;

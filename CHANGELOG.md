@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Layout: `Card` sizes a box to its rows, and `route` draws a connector that meets an edge
+  without crossing text or another box. `verify:motion` rejects a frame that breaks
+  those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`). `intrude` is a text
+  sitting inside a box it is not part of, including mid-flight.
 - TypeScript: the library, scenes, player, Worker, tools and tests are strict TypeScript.
   The package ships `dist/` (ESM, `.d.ts`, declaration maps) compiled by `tsc`; option,
   document and trace types (`Doc`, `TextOpts`, `StepRecord`, ...) are exported from the

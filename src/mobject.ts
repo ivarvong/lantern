@@ -92,6 +92,12 @@ export class Mobject {
   declare _mrec?: MergedCache;
   /** Render a group of same-styled leaves as one element (Text sets this). */
   declare mergeLeaves?: boolean;
+  /**
+   * This mobject is allowed to share space with another (a gauge fill inside
+   * its shell, a highlight behind a line). Overlap is a layout error unless
+   * one of the two declares it.
+   */
+  allowOverlap = false;
 
   constructor(style: Style = {}) {
     this.id = nextId++;

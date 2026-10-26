@@ -9,7 +9,7 @@ const EXPECTED = [
   // model
   'Mobject', 'Group', 'VMobject',
   'Arc', 'ArcBetweenPoints', 'Arrow', 'Circle', 'CurvedArrow', 'Dot', 'Labeled', 'Line', 'Polygon', 'Rectangle', 'Square',
-  'Text', 'DecimalNumber', 'Code', 'title', 'CodePanel', 'StateReadout',
+  'Text', 'DecimalNumber', 'Code', 'Card', 'route', 'obstacles', 'title', 'CodePanel', 'StateReadout',
   'Flowchart', 'flowchart', 'FLOWCHART_THEME', 'parseMermaid', 'layoutGraph',
   // motion
   'Animation', 'Transform', 'FadeIn', 'FadeOut', 'Create', 'Write', 'Indicate', 'Flash', 'MoveAlongPath', 'AnimationGroup', 'LaggedStart',

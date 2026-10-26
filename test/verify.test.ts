@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, MotionSink, analyzeMotion, linear, RIGHT } from '../src/index.ts';
+import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -21,7 +21,7 @@ test('quiet on smooth motion: shifts, fades, morphs, draw-ins, fast linear moves
     await s.play(r.animate.shift([5, 0]), { runTime: 0.5 });          // fast but smooth
     await s.play(r.animate.shift([-5, 0]), { runTime: 0.5, rateFunc: linear });
     await s.play(new Transform(r, new Circle({ radius: 1 }).shift([1, 1])));
-    await s.play(new Create(new Line([-3, 2], [3, 2])));
+    await s.play(new Create(new Line([-3, 3], [3, 3])));
     await s.play(new FadeOut(r));
   }), []);
 });
@@ -115,6 +115,117 @@ test('a label that crosses its rectangle is overflow; a centered one is not', as
     await s.wait(0.2);
   });
   assert.deepEqual(fit, []);
+});
+
+test('the old strip frame fails pierce and fill', async () => {
+  // The held frame: a tall card, accept and git-protocol sunk at its bottom,
+  // user-agent outside, and a straight line from the code through both.
+  const kinds = await run(async (s) => {
+    const accept = new Text('accept', { font: 'mono', fontSize: 0.46 }).moveTo([-1.2, -0.62], LEFT);
+    const proto = new Text('git-protocol', { font: 'mono', fontSize: 0.46 }).moveTo([-1.2, -1.2], LEFT);
+    const card = new Rectangle({
+      width: 5.4, height: 3.83, cornerRadius: 0.12,
+      stroke: '#ff9f1a', strokeWidth: 0.04, fill: '#ff9f1a', fillOpacity: 0.05,
+    });
+    card.moveTo([1.1, 0.25]);
+    const ua = new Text('user-agent  ply-viewer/0.1.0', { font: 'mono', fontSize: 0.44 });
+    ua.moveTo([0.4, -2.15]);
+    const token = new Text('VIEWER_UA', { font: 'mono', fontSize: 0.5 }).moveTo([1.5, 3.2]);
+    const line = new Line(token.bottom(), ua.center(), { stroke: '#ffffff', strokeWidth: 0.04 });
+    s.add(card, accept, proto, ua, token, line);
+    await s.wait(0.2);
+  });
+  assert.ok(kinds.includes('pierce'), `expected pierce, got ${kinds}`);
+  assert.ok(kinds.includes('fill'), `expected fill, got ${kinds}`);
+});
+
+test('short hops along a glyph are one connector and a pierce', async () => {
+  // A stair of grid steps used to inherit the end pad on every piece, so a line
+  // could run the length of a word and the check called each step an attachment.
+  const kinds = await run(async (s) => {
+    const t = new Text('github.com', { font: 'mono', fontSize: 0.5 }).moveTo([0, 1.5]);
+    const b = t.box()!;
+    const y = b[1] - 0.03;
+    const g = new Group();
+    for (let x = b[0] + 0.05; x < b[2] - 0.3; x += 0.22) {
+      g.add(new Line([x, y], [x + 0.22, y], { stroke: '#ffffff', strokeWidth: 0.04 }));
+    }
+    s.add(t, g);
+    await s.wait(0.2);
+  });
+  assert.ok(kinds.includes('pierce'), `expected pierce, got ${kinds}`);
+});
+
+test('a token that flies through a foreign box is intrude; a row of that box is not', async () => {
+  const through = await run(async (s) => {
+    const card = new Card({ padding: 0.28, gap: 0.16, align: 'start' });
+    const row = new Text('accept  */*', { font: 'mono', fontSize: 0.42 });
+    card.layout([row]);
+    const token = new Text('VIEWER_UA', { font: 'mono', fontSize: 0.5 }).moveTo([0, card.frame.top()[1] + 1.1]);
+    s.add(card, token);
+    await s.play(new Transform(token, token.copy().moveTo(row)), { runTime: 0.6 });
+    await s.wait(0.1);
+  });
+  assert.ok(through.includes('intrude'), `expected intrude, got ${through}`);
+  const row = await run(async (s) => {
+    const card = new Card({ padding: 0.28, gap: 0.16, align: 'start' });
+    card.layout([new Text('user-agent  ply-viewer/0.1.0', { font: 'mono', fontSize: 0.42 })]);
+    s.add(card);
+    await s.wait(0.2);
+  });
+  assert.deepEqual(row, []);
+});
+
+test('a card sized to its rows and a routed connector are clean', async () => {
+  const kinds = await run(async (s) => {
+    const card = new Card({ padding: 0.28, gap: 0.16, align: 'start', stroke: '#ff9f1a', fill: '#ff9f1a', fillOpacity: 0.06 });
+    const rows = ['accept  */*', 'git-protocol  version=2', 'user-agent  ply-viewer/0.1.0'].map((t) => new Text(t, { font: 'mono', fontSize: 0.42 }));
+    card.layout(rows);
+    card.shift([0, 1.4 - card.frame.top()[1]]);
+    const token = new Text('VIEWER_UA', { font: 'mono', fontSize: 0.5 }).moveTo([0, 3.3]);
+    s.add(card, token);
+    // Endpoints are not obstacles. The other rows and the frame are.
+    s.add(route(token, rows[2]!, [card.frame, rows[0]!, rows[1]!], { stroke: '#ffffff', strokeWidth: 0.045, clearance: 0.14, dock: 'side' }));
+    await s.wait(0.2);
+  });
+  assert.deepEqual(kinds, []);
+});
+
+test('overlapping settled texts are overlap; allowOverlap opts out', async () => {
+  const piled = await run(async (s) => {
+    const a = new Text('alpha', { fontSize: 0.6 });
+    const b = new Text('beta', { fontSize: 0.6 }).shift([0.4, 0.08]);
+    s.add(a, b);
+    await s.wait(0.2);
+  });
+  assert.ok(piled.includes('overlap'), `expected overlap, got ${piled}`);
+  const declared = await run(async (s) => {
+    const a = new Text('one', { fontSize: 0.5 });
+    const b = new Text('two', { fontSize: 0.5 });
+    b.allowOverlap = true;
+    s.add(a, b);
+    await s.wait(0.2);
+  });
+  assert.deepEqual(declared, []);
+});
+
+test('stacked texts closer than the minimum gap are a margin error', async () => {
+  const tight = await run(async (s) => {
+    const a = new Text('alpha', { fontSize: 0.5 });
+    const b = new Text('beta', { fontSize: 0.5 });
+    b.moveTo([0, -(a.height() + 0.015)]);
+    s.add(a, b);
+    await s.wait(0.2);
+  });
+  assert.ok(tight.includes('margin'), `expected margin, got ${tight}`);
+  const led = await run(async (s) => {
+    const a = new Text('alpha', { fontSize: 0.5 });
+    const b = new Text('beta', { fontSize: 0.5 });
+    b.moveTo([0, -(a.height() + 0.04)]);
+    s.add(a, b);
+    await s.wait(0.2);
+  });
+  assert.deepEqual(led, []);
 });
 
 test('every example scene is free of motion discontinuities', async () => {

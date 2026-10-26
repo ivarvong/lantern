@@ -16,6 +16,12 @@
 //              ReplacementTransform) but the replacement is somewhere else
 //   ghost      two texts overlap while both are only partly opaque (a crossfade)
 //   overflow   a label whose center sits in its shape sticks out of that shape
+//   pierce     a connector crosses a glyph run or a box edge away from its ends
+//   fill       a box's contents sit in one corner of it (the box was not sized to them)
+//   overlap    two settled shapes occupy the same space, and neither declares it
+//   margin     two settled texts are closer than the minimum gap
+//   intrude    a moving text that belongs to no box crosses a label inside one
+//              (a token flying through a card's rows, not into an empty slot)
 //
 // A cut-out and cut-in in the same frame with matching boxes is a seamless
 // handoff and is not reported. Every event carries the step it happened in.
@@ -24,7 +30,8 @@ import { VMobject } from './vmobject.ts';
 import type { Box, HasText, Mobject } from './mobject.ts';
 import type { Scene, Sink } from './scene.ts';
 import { Text } from './text.ts';
-import { Labeled } from './shapes.ts';
+import { Arc, Labeled, Line, Rectangle } from './shapes.ts';
+import { LAYOUT, segmentBlocked } from './layout.ts';
 
 /** Thresholds for analyzeMotion(); see DEFAULTS. */
 export interface MotionOptions {
@@ -41,7 +48,7 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'overlap' | 'margin' | 'intrude';
 export interface MotionEvent { kind: MotionKind; frame: number; t: number; step: string | null; what: string; magnitude: number; detail: string }
 export interface MotionSummary { kind: MotionKind; step: string | null; frame: number; t: number; count: number; max: number; examples: string[] }
 
@@ -186,6 +193,305 @@ export class MotionSink implements Sink {
       for (const c of m.children) walkLabeled(c);
     };
     for (const top of scene.mobjects) walkLabeled(top);
+    this.sampleGeometry(scene, texts, shown);
+  }
+
+  /** True when this leaf's size changed over the last quarter-second: a pulse, not a layout. */
+  private pulsing(id: number, w: number, h: number): boolean {
+    const back = this.frames[Math.max(0, this.frames.length - 8)];
+    const p = back?.leaves.get(id);
+    if (!p) return false;
+    return Math.abs(p.w - w) > 0.04 || Math.abs(p.h - h) > 0.04;
+  }
+
+  /** True when this leaf is holding still, so a layout error is the picture and not a midpoint of a move. */
+  private resting(id: number, cx: number, cy: number, w: number, h: number): boolean {
+    const prev = this.frames[this.frames.length - 2];
+    if (!prev) return true;
+    const p = prev.leaves.get(id);
+    if (!p) return false;
+    return Math.hypot(p.cx - cx, p.cy - cy) < 0.025 && Math.abs(p.w - w) < 0.03 && Math.abs(p.h - h) < 0.03;
+  }
+
+  /**
+   * Geometric layout, on every frame whose picture is holding still.
+   * A connector is a Line or an open Arc (arrow shafts and routed polylines).
+   * It may meet a box edge or a token only at its own ends.
+   */
+  private sampleGeometry(scene: Scene, texts: Text[], shown: (m: Text) => number): void {
+    const frame = this.frames.length - 1;
+    const step = scene.currentStep?.path ?? null;
+    const t = +scene.time.toFixed(3);
+    const note = (kind: MotionKind, key: string, what: string, magnitude: number, detail: string): void => {
+      if (this.layoutSeen.has(key)) return;
+      this.layoutSeen.add(key);
+      this.layoutEvents.push({ kind, frame, t, step, what, magnitude: +magnitude.toFixed(3), detail });
+    };
+    const leaf = (m: Mobject): LeafSample | undefined => this.frames[frame]!.leaves.get(m.id);
+    const area = (b: Box) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+    const contains = (a: Box, b: Box, tol = 0.03) => a[0] <= b[0] + tol && a[1] <= b[1] + tol && a[2] >= b[2] - tol && a[3] >= b[3] - tol;
+    const overlapBox = (a: Box, b: Box): number => {
+      const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+      const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+      return ix * iy;
+    };
+
+    // One connector is one polyline. The end pad applies at its two ends only;
+    // a stair of short hops is not a row of attachments.
+    type RawSeg = { id: number; a: [number, number]; b: [number, number] };
+    type ConnSeg = RawSeg & { pad0: number; pad1: number };
+    const lineGroups = new Map<number, RawSeg[]>();
+    const arcGroups = new Map<number, RawSeg[]>();
+    const arcBoxes: Array<{ id: number; box: Box }> = [];
+    const segs: ConnSeg[] = [];
+    const rects: Array<{ m: Rectangle; box: Box }> = [];
+    const liveRects: Array<{ m: Rectangle; box: Box }> = [];
+    const near = (p: [number, number], q: [number, number]): boolean => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.04;
+    const chain = (raw: RawSeg[]): ConnSeg[] => {
+      const left = raw.map((s) => ({ ...s }));
+      const chains: RawSeg[][] = [];
+      while (left.length) {
+        const path = [left.pop()!];
+        let grew = true;
+        while (grew) {
+          grew = false;
+          for (let i = 0; i < left.length; i++) {
+            const s = left[i]!;
+            const head = path[0]!, tail = path[path.length - 1]!;
+            let next: RawSeg | null = null;
+            let at: 'head' | 'tail' = 'tail';
+            if (near(s.b, head.a)) { next = s; at = 'head'; }
+            else if (near(s.a, head.a)) { next = { id: s.id, a: s.b, b: s.a }; at = 'head'; }
+            else if (near(s.a, tail.b)) { next = s; at = 'tail'; }
+            else if (near(s.b, tail.b)) { next = { id: s.id, a: s.b, b: s.a }; at = 'tail'; }
+            if (!next) continue;
+            if (at === 'head') path.unshift(next); else path.push(next);
+            left.splice(i, 1);
+            grew = true;
+            break;
+          }
+        }
+        chains.push(path);
+      }
+      const out: ConnSeg[] = [];
+      for (const path of chains) {
+        path.forEach((s, i) => {
+          out.push({ ...s, pad0: i === 0 ? LAYOUT.endPad : 0, pad1: i === path.length - 1 ? LAYOUT.endPad : 0 });
+        });
+      }
+      return out;
+    };
+    const walk = (m: Mobject): void => {
+      const drawn = (m.style.drawFraction ?? 1) >= 0.98 && alphaOf(m) >= 0.5;
+      if (drawn && m instanceof Line) {
+        const s = leaf(m);
+        if (s && this.resting(m.id, s.cx, s.cy, s.w, s.h)) {
+          const key = m.parent?.id ?? -m.id;
+          const list = lineGroups.get(key) ?? [];
+          list.push({ id: m.id, a: m.start(), b: m.end() });
+          lineGroups.set(key, list);
+        }
+      } else if (drawn && m instanceof Arc && !m.closed[0]) {
+        const s = leaf(m);
+        if (s && this.resting(m.id, s.cx, s.cy, s.w, s.h)) {
+          const n = 8;
+          let prev = m.pointFromProportion(0);
+          const samples: RawSeg[] = [];
+          for (let i = 1; i <= n; i++) {
+            const p = m.pointFromProportion(i / n);
+            samples.push({ id: m.id, a: prev, b: p });
+            prev = p;
+          }
+          arcGroups.set(m.id, samples);
+          const b = m.box();
+          if (b) arcBoxes.push({ id: m.id, box: b });
+        }
+      }
+      if (drawn && m instanceof Rectangle) {
+        const b = m.box();
+        const s = leaf(m);
+        // A pulse (Indicate) changes size for a few frames. That is not the layout.
+        if (b && s && !this.pulsing(m.id, s.w, s.h) && alphaOf(m) >= 0.85) {
+          liveRects.push({ m, box: b });
+          if (this.resting(m.id, s.cx, s.cy, s.w, s.h) && alphaOf(m) >= 0.9) rects.push({ m, box: b });
+        }
+      }
+      for (const c of m.children) walk(c);
+    };
+    for (const top of scene.mobjects) walk(top);
+    for (const raw of lineGroups.values()) segs.push(...chain(raw));
+    for (const raw of arcGroups.values()) segs.push(...chain(raw));
+    const lineIds = new Set<number>();
+    for (const list of lineGroups.values()) for (const s of list) lineIds.add(s.id);
+
+    const glyphRuns: Array<{ m: Text; box: Box }> = [];
+    for (const m of texts) {
+      if (shown(m) < 0.45) continue;
+      const b = m.box();
+      const s = leaf(m);
+      if (!b || !s) continue;
+      glyphRuns.push({ m, box: b });
+    }
+
+    // A token that travels through a card is not a connector, so pierce never
+    // sees it. Text that already belongs to some box (a row, a chip, a node
+    // label) may cross a larger box around that one, as a camera move does.
+    const belongs = (text: Mobject, rect: Mobject): boolean => {
+      const host = rect.parent;
+      if (!host) return false;
+      for (let p: Mobject | null = text; p; p = p.parent) if (p === host || p === rect) return true;
+      return false;
+    };
+    const owned = new Set<Text>();
+    for (const g of glyphRuns) for (const r of liveRects) if (belongs(g.m, r.m)) owned.add(g.m);
+    for (const g of glyphRuns) {
+      if (owned.has(g.m) || shown(g.m) < 0.9) continue;
+      const s = leaf(g.m);
+      if (!s || this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+      const cx = (g.box[0] + g.box[2]) / 2, cy = (g.box[1] + g.box[3]) / 2;
+      for (const r of liveRects) {
+        if (r.m.allowOverlap || g.m.allowOverlap) continue;
+        const inset = 0.08;
+        if (cx <= r.box[0] + inset || cx >= r.box[2] - inset || cy <= r.box[1] + inset || cy >= r.box[3] - inset) continue;
+        // Entering an empty slot is the slot's job. Crossing a label that
+        // already lives in the box is a token cutting through the card.
+        const hitsContent = glyphRuns.some((other) => {
+          if (other.m === g.m || !owned.has(other.m) || shown(other.m) < 0.9) return false;
+          const ocx = (other.box[0] + other.box[2]) / 2, ocy = (other.box[1] + other.box[3]) / 2;
+          if (ocx <= r.box[0] || ocx >= r.box[2] || ocy <= r.box[1] || ocy >= r.box[3]) return false;
+          return overlapBox(g.box, other.box) > 0.01;
+        });
+        if (!hitsContent) continue;
+        note('intrude', `intrude:${g.m.id}:r${r.m.id}`, `"${g.m.text.slice(0, 28)}"`, 1, 'this text crosses a box it is not part of');
+      }
+    }
+
+    for (const seg of segs) {
+      for (const g of glyphRuns) {
+        if (!segmentBlocked(seg.a, seg.b, g.box, LAYOUT.clearance, seg.pad0, seg.pad1)) continue;
+        note('pierce', `pierce:${seg.id}:${g.m.id}`, `"${g.m.text.slice(0, 28)}"`, 1, `connector (${seg.a[0].toFixed(2)},${seg.a[1].toFixed(2)})→(${seg.b[0].toFixed(2)},${seg.b[1].toFixed(2)}) crosses this text`);
+      }
+      for (const r of rects) {
+        if (r.m.allowOverlap) continue;
+        if (!segmentBlocked(seg.a, seg.b, r.box, 0, seg.pad0, seg.pad1)) continue;
+        note('pierce', `pierce:${seg.id}:r${r.m.id}`, `Rectangle#${r.m.id}`, 1, 'connector crosses this box');
+      }
+      // A line that enters another connector's arc is the same kind of crossing.
+      if (!lineIds.has(seg.id)) continue;
+      for (const arc of arcBoxes) {
+        if (!segmentBlocked(seg.a, seg.b, arc.box, 0, seg.pad0, seg.pad1)) continue;
+        note('pierce', `pierce:${seg.id}:a${arc.id}`, `Arc#${arc.id}`, 1, 'connector crosses this arc');
+      }
+    }
+
+    for (const r of rects) {
+      if (r.m.allowOverlap) continue;
+      // A cluster or a shell holds other boxes. Its own label sits at the top;
+      // the fill rule is for a box whose contents are the text, sized to that text.
+      const holdsBox = rects.some((other) => {
+        if (other.m === r.m || area(other.box) < 0.15) return false;
+        const cx = (other.box[0] + other.box[2]) / 2, cy = (other.box[1] + other.box[3]) / 2;
+        return cx > r.box[0] && cx < r.box[2] && cy > r.box[1] && cy < r.box[3];
+      });
+      if (holdsBox) continue;
+      // A Labeled shape already placed its label (centered, or pinned as a title).
+      // Fill is for a bare rectangle whose text was positioned by hand.
+      if (r.m.parent instanceof Labeled && r.m.parent.shape === r.m) continue;
+      const inside: Box[] = [];
+      let pending = false;
+      for (const g of glyphRuns) {
+        const cx = (g.box[0] + g.box[2]) / 2, cy = (g.box[1] + g.box[3]) / 2;
+        const cxIn = cx > r.box[0] && cx < r.box[2] && cy > r.box[1] && cy < r.box[3];
+        if (!cxIn) continue;
+        const a = shown(g.m);
+        if (a > 0.05 && a < 0.995) pending = true;
+      }
+      if (pending) continue;
+      for (const g of glyphRuns) {
+        if (shown(g.m) < 0.995) continue;
+        const s = leaf(g.m);
+        if (!s || !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+        const cx = (g.box[0] + g.box[2]) / 2, cy = (g.box[1] + g.box[3]) / 2;
+        const cxIn = cx > r.box[0] && cx < r.box[2] && cy > r.box[1] && cy < r.box[3];
+        if (!cxIn) {
+          const hit = overlapBox(g.box, r.box);
+          if (hit > 0.012 && !g.m.allowOverlap) note('overlap', `overlap:t${g.m.id}:r${r.m.id}`, `"${g.m.text.slice(0, 24)}"`, hit, 'text sits across a box edge');
+          continue;
+        }
+        inside.push(g.box);
+      }
+      if (!inside.length) continue;
+      // A row leaving this box is still its child. The gap it opens is the
+      // exit, and the frame closes in the same gesture.
+      let leaving = false;
+      for (const g of glyphRuns) {
+        if (shown(g.m) < 0.5 || !belongs(g.m, r.m)) continue;
+        const s = leaf(g.m);
+        if (s && !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) { leaving = true; break; }
+      }
+      if (leaving) continue;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const b of inside) {
+        minX = Math.min(minX, b[0]); minY = Math.min(minY, b[1]);
+        maxX = Math.max(maxX, b[2]); maxY = Math.max(maxY, b[3]);
+      }
+      const gapTop = r.box[3] - maxY, gapBot = minY - r.box[1];
+      const h = r.box[3] - r.box[1];
+      const slack = Math.abs(gapTop - gapBot);
+      const sunk = Math.max(gapTop, gapBot);
+      // A short chip or bar is centered. A tall card is sized to its rows, so the
+      // empty margin is the padding on both sides, not a corner the rows fell into.
+      const bad = h >= 1.15 ? sunk > LAYOUT.fillSlack && slack > LAYOUT.fillSlack : slack > 0.24 && sunk > 0.3;
+      if (bad) {
+        const names = glyphRuns.filter((g) => {
+          const cx = (g.box[0] + g.box[2]) / 2, cy = (g.box[1] + g.box[3]) / 2;
+          return cx > r.box[0] && cx < r.box[2] && cy > r.box[1] && cy < r.box[3];
+        }).map((g) => g.m.text.slice(0, 20)).join(' | ');
+        note('fill', `fill:${r.m.id}`, `Rectangle#${r.m.id}`, slack, `content margin top ${gapTop.toFixed(2)} bottom ${gapBot.toFixed(2)} [${names}] h=${h.toFixed(2)}`);
+      }
+    }
+
+    const settledText: Array<{ m: Text; box: Box }> = [];
+    for (const g of glyphRuns) {
+      if (shown(g.m) < 0.995) continue;
+      const s = leaf(g.m);
+      if (!s || !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+      settledText.push(g);
+    }
+    for (let i = 0; i < settledText.length; i++) {
+      for (let j = i + 1; j < settledText.length; j++) {
+        const A = settledText[i]!, B = settledText[j]!;
+        if (A.m.allowOverlap || B.m.allowOverlap) continue;
+        const inter = overlapBox(A.box, B.box);
+        const minA = Math.min(area(A.box), area(B.box));
+        if (inter > 0.012 && inter > 0.2 * minA && !contains(A.box, B.box) && !contains(B.box, A.box)) {
+          note('overlap', `overlap:${Math.min(A.m.id, B.m.id)}:${Math.max(A.m.id, B.m.id)}`, `"${A.m.text.slice(0, 18)}" × "${B.m.text.slice(0, 18)}"`, inter, 'two texts occupy the same space');
+          continue;
+        }
+        if (inter > 0.004) continue;
+        const xOverlap = Math.min(A.box[2], B.box[2]) - Math.max(A.box[0], B.box[0]);
+        const yOverlap = Math.min(A.box[3], B.box[3]) - Math.max(A.box[1], B.box[1]);
+        const vGap = yOverlap < 0 ? -yOverlap : 0;
+        const hGap = xOverlap < 0 ? -xOverlap : 0;
+        const sameLine = Math.abs((A.box[1] + A.box[3]) / 2 - (B.box[1] + B.box[3]) / 2) < 0.06;
+        if (sameLine && hGap >= 0 && hGap < 0.08) continue;
+        const stacked = xOverlap > 0.15 * Math.min(A.box[2] - A.box[0], B.box[2] - B.box[0]);
+        if (stacked && vGap > 0.001 && vGap < LAYOUT.minGap) {
+          note('margin', `margin:${Math.min(A.m.id, B.m.id)}:${Math.max(A.m.id, B.m.id)}`, `"${A.m.text.slice(0, 18)}" × "${B.m.text.slice(0, 18)}"`, vGap, `vertical gap ${vGap.toFixed(3)}`);
+        }
+      }
+    }
+
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const A = rects[i]!, B = rects[j]!;
+        if (A.m.allowOverlap || B.m.allowOverlap) continue;
+        if (contains(A.box, B.box) || contains(B.box, A.box)) continue;
+        const inter = overlapBox(A.box, B.box);
+        if (inter <= 0.02) continue;
+        note('overlap', `overlap:r${Math.min(A.m.id, B.m.id)}:r${Math.max(A.m.id, B.m.id)}`, `Rectangle#${A.m.id} × Rectangle#${B.m.id}`, inter, 'two boxes occupy the same space');
+      }
+    }
   }
 }
 

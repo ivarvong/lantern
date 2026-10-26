@@ -14,11 +14,11 @@
 //   commit / offset = blue,  ref-delta = red,  credential = orange,
 //   blob bytes = grey,  pkt length / span = gold,  HTTP 400 = red.
 import {
-  Scene, Group, Text, Rectangle, Line, Arrow, CurvedArrow, Labeled, FadeIn, FadeOut, Create, Transform, LaggedStart,
-  linear, LEFT, RIGHT, UP, DOWN,
+  Scene, Group, Text, Rectangle, Arrow, CurvedArrow, Labeled, FadeIn, FadeOut, Create, Transform, LaggedStart,
+  Card, route, obstacles, linear, LEFT, RIGHT,
   BLUE, TEAL, GREEN, RED, GREY, WHITE, ORANGE, GOLD,
 } from '../src/index.ts';
-import type { Mobject } from '../src/index.ts';
+import type { Mobject, PathFunc } from '../src/index.ts';
 
 const INK = '#d8d8d8';
 const DIM = '#8d8d8d';
@@ -82,20 +82,19 @@ function cite(file: string, line: number): Text {
   return mono(`${file}:${line}`, 0.4, DIM, 'start').moveTo([-7.6, CITE_Y], LEFT);
 }
 
-/** A straight connector that stops short of both ends. */
-function join(a: Mobject, b: Mobject, color: string): Line {
-  const ac = a.center(), bc = b.center();
-  const down = ac[1] >= bc[1];
-  const p = down ? a.bottom() : a.top();
-  const q = down ? b.top() : b.bottom();
-  const dx = q[0] - p[0], dy = q[1] - p[1], len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  return new Line(
-    [p[0] + ux * 0.14, p[1] + uy * 0.14],
-    [q[0] - ux * 0.12, q[1] - uy * 0.12],
-    { stroke: color, strokeWidth: 0.04 },
-  );
-}
+/**
+ * Rigid elbow: all the way across, then all the way down. A straight blend
+ * from the code line into the card would carry the token through the rows.
+ */
+const elbow: PathFunc = (a, b, t) => {
+  const split = 0.48;
+  if (t < split) {
+    const u = t / split;
+    return [a[0] + (b[0] - a[0]) * u, a[1]];
+  }
+  const u = (t - split) / (1 - split);
+  return [b[0], a[1] + (b[1] - a[1]) * u];
+};
 
 function chip(label: string, color: string, fontSize = 0.4): Labeled<Rectangle, Text> {
   const t = mono(label, fontSize, WHITE);
@@ -134,18 +133,24 @@ export class PlyViewerScene extends Scene {
     this.add(graphic, data);
     let code: Group | null = null;
     let citeT: Text | null = null;
-    const links: Line[] = [];
+    const links: Group[] = [];
 
     const clearLinks = async (): Promise<void> => {
       if (!links.length) return;
       const gone = links.splice(0);
       await this.play(...gone.map((l) => new FadeOut(l)), { runTime: 0.25 });
     };
-    const link = async (from: Mobject, to: Mobject, color: string): Promise<Line> => {
-      const line = join(from, to, color);
-      links.push(line);
-      await this.play(new Create(line), { runTime: 0.4 });
-      return line;
+    // A connector meets an edge and stays clear of every other glyph and box.
+    const link = async (from: Mobject, to: Mobject, color: string, dock: 'auto' | 'side' | 'facing' = 'auto'): Promise<Group> => {
+      const roots: Mobject[] = [graphic, data];
+      if (code) roots.push(code);
+      if (citeT) roots.push(citeT);
+      const avoid = obstacles(roots, [from, to], (m) => m.style.opacity ?? 1);
+      const path = route(from, to, avoid, { stroke: color, strokeWidth: 0.045, clearance: 0.14, dock });
+      links.push(path);
+      // One draw, not a lagged reveal per bend: a stair of short lines pops in.
+      await this.play(new Create(path, { lagRatio: 0 }), { runTime: 0.45 });
+      return path;
     };
     const swapCode = async (file: string, line: number, source: string, token: string, color: string): Promise<Text> => {
       await clearLinks();
@@ -293,65 +298,174 @@ export class PlyViewerScene extends Scene {
     };
     placeRow([ghBox, others[0]!, others[1]!], -0.35);
     placeRow([others[2]!, others[3]!], -1.55);
+    // Keep a clear drop under github.com. The second row starts to its right.
+    for (const chip of [others[2]!, others[3]!]) chip.shift([1.7, 0]);
     graphic.add(ghBox, ...others);
     await this.play(new LaggedStart([ghBox, ...others].map((m) => new FadeIn(m)), { lagRatio: 0.12 }), { runTime: 0.8 });
     const dHost = Math.hypot(ghBox.center()[0] - hostTok.center()[0], ghBox.center()[1] - hostTok.center()[1]);
     await this.play(hostTok.animate.moveTo(ghBox).scale(0.7), { runTime: glide(dHost) });
-    await this.play(ghBox.animate.setStyle({ stroke: TEAL, fill: TEAL, fillOpacity: 0.28 }), { runTime: 0.35 });
+    // The path shifted up after hostAt was measured. Put the host word back in the hole.
+    const hostAgain = mono('github.com', FS, TEAL);
+    hostAgain.moveTo([hostAt[0], hostAt[1] + 0.85]);
+    graphic.add(hostAgain);
+    await this.play(new FadeIn(hostAgain), ghBox.animate.setStyle({ stroke: TEAL, fill: TEAL, fillOpacity: 0.28 }), { runTime: 0.35 });
     st.host = 'github.com';
     await link(allowTok, hostTok, TEAL);
-    const readout = mono('host  github.com', 0.46, TEAL).moveTo([0, -2.7]);
+    const readout = mono('host  github.com', 0.46, TEAL).moveTo([-3.3, -2.85]);
     graphic.add(readout);
     await this.play(new FadeIn(readout), { runTime: 0.3 });
     await link(hostTok, readout, TEAL);
-    const bad = mono('github.com.', 0.42, RED).moveTo([6.2, -2.7]);
+    const bad = mono('github.com.', 0.42, RED).moveTo([6.4, -0.35]);
     graphic.add(bad);
     await this.play(new FadeIn(bad), { runTime: 0.3 });
-    await this.play(bad.animate.moveTo([5.4, -1.55]), { runTime: 0.6 });
+    await this.play(bad.animate.moveTo([6.4, -2.55]), { runTime: 0.6 });
     await this.play(new FadeOut(bad), { runTime: 0.35 });
     await this.wait(0.3);
 
-    // ---- strip: credential headers leave before the request does -----------
-    await this.step('strip', { caption: 'Only four headers survive. User-Agent is forced.', file: 'worker/viewer/fetchguard.ts', line: 18 });
+    // ---- strip: one request card. Credential rows detach; the card closes. --
+    await this.step('strip', { caption: 'Credentials leave the request. User-Agent is forced.', file: 'worker/viewer/fetchguard.ts', line: 18 });
     await clearGraphic();
     const stripTok = await swapCode(
       'worker/viewer/fetchguard.ts', 18,
       '    if (ALLOWED.has(key.toLowerCase())) out.set(key, value);',
       'ALLOWED.has', ORANGE,
     );
-    const forbidden = ['Authorization', 'Git-Token', 'Cookie', 'Git-Authorization'];
-    const keptNames = ['accept', 'git-protocol'];
-    const forb = forbidden.map((h) => mono(h, 0.46, ORANGE));
-    const kept = keptNames.map((h) => mono(h, 0.46, TEAL));
-    const headers = [...forb, ...kept];
-    headers.forEach((h, i) => h.moveTo([-1.2, 1.7 - i * 0.58], LEFT));
-    const card = new Rectangle({
-      width: 5.4, height: headers.length * 0.58 + 0.35, cornerRadius: 0.12,
-      stroke: ORANGE, strokeWidth: 0.04, fill: ORANGE, fillOpacity: 0.05,
+    const ROW_FS = 0.42;
+    const COL = 0.34;
+    type RowSpec = { name: string; value: string; nameColor: string; valueColor: string; credential: boolean };
+    const specs: RowSpec[] = [
+      { name: 'Authorization', value: '<client>', nameColor: ORANGE, valueColor: ORANGE, credential: true },
+      { name: 'Cookie', value: '<client>', nameColor: ORANGE, valueColor: ORANGE, credential: true },
+      { name: 'Git-Token', value: '<client>', nameColor: ORANGE, valueColor: ORANGE, credential: true },
+      { name: 'Git-Authorization', value: '<client>', nameColor: ORANGE, valueColor: ORANGE, credential: true },
+      { name: 'accept', value: '*/*', nameColor: TEAL, valueColor: INK, credential: false },
+      { name: 'git-protocol', value: 'version=2', nameColor: TEAL, valueColor: INK, credential: false },
+      { name: 'user-agent', value: '<client>', nameColor: INK, valueColor: DIM, credential: false },
+    ];
+    const nameW = Math.max(...specs.map((s) => mono(s.name, ROW_FS, INK, 'start').advance()));
+    const built = specs.map((s) => {
+      const label = s.name;
+      const name = mono(s.name, ROW_FS, s.nameColor, 'start');
+      const value = mono(s.value, ROW_FS, s.valueColor, 'start');
+      name.moveTo([0, 0], LEFT);
+      value.moveTo([nameW + COL, 0], LEFT);
+      return { ...s, label, name, value, row: new Group(name, value) };
     });
-    card.moveTo([-1.2 + 2.3, (headers[0]!.center()[1] + headers[headers.length - 1]!.center()[1]) / 2]);
-    graphic.add(card, ...headers);
-    await this.play(new FadeIn(card), new LaggedStart(headers.map((h) => new FadeIn(h)), { lagRatio: 0.1 }), { runTime: 0.7 });
-    await link(stripTok, forb[0]!, ORANGE);
-    const dropped: Text[] = [];
-    for (const [i, h] of forb.entries()) {
-      await clearLinks();
-      const dest: [number, number] = [-6.2 + i * 3.3, -3.45];
-      const d = Math.hypot(dest[0] - h.center()[0], dest[1] - h.center()[1]);
-      await this.play(h.animate.moveTo(dest).scale(0.78), { runTime: glide(d) });
-      dropped.push(h);
+    const card = new Card({
+      padding: 0.26, gap: 0.14, align: 'start', cornerRadius: 0.12,
+      stroke: ORANGE, strokeWidth: 0.045, fill: ORANGE, fillOpacity: 0.06,
+    });
+    card.layout(built.map((b) => b.row));
+    card.shift([0, 2.2 - card.frame.top()[1]]);
+    graphic.add(card);
+    await this.play(
+      new FadeIn(card.frame, { runTime: 0.35 }),
+      new LaggedStart(built.map((b) => new FadeIn(b.row, { runTime: 0.35 })), { lagRatio: 0.16 }),
+    );
+    await link(stripTok, card.frame, ORANGE, 'facing');
+    // Each credential leaves through the side, clear of the card, and only then
+    // does the gap close. Collapsing at the same time uncovered the row below
+    // the rising bottom and parked it there as a loose word.
+    const dropped: string[] = [];
+    for (const b of built.filter((r) => r.credential)) {
+      const stay = card.rows.filter((r) => r !== b.row);
+      const plan = card.plan(stay, 'top');
+      // Out the side first, then down. The card waits until the row has cleared
+      // its slot, so the row below does not rise through it.
+      const aside = b.row.copy();
+      aside.moveTo([card.frame.right()[0] + 0.28, b.row.center()[1]], LEFT);
+      const fall = aside.copy();
+      fall.shift([0.55, -1.35]);
+      for (const m of fall.family()) m.style.opacity = 0;
+      const exit = new Transform(b.row, fall, {
+        pathFunc: (a, end, t) => {
+          const slideEnd = 0.56;
+          const gate: [number, number] = [end[0] - 0.55, end[1] + 1.35];
+          if (t < slideEnd) {
+            const u = t / slideEnd;
+            return [a[0] + (gate[0] - a[0]) * u, a[1] + (gate[1] - a[1]) * u];
+          }
+          const u = (t - slideEnd) / (1 - slideEnd);
+          return [gate[0] + (end[0] - gate[0]) * u, gate[1] + (end[1] - gate[1]) * u];
+        },
+      });
+      exit.rateFunc = linear;
+      const after = (t: number): number => (t < 0.48 ? 0 : (t - 0.48) / 0.52);
+      const frameAnim = new Transform(card.frame, card.frameTarget(plan));
+      frameAnim.rateFunc = after;
+      const movers = stay.map((r, i) => {
+        const anim = new Transform(r, r.copy().moveTo(plan.anchors[i]!, LEFT));
+        anim.rateFunc = after;
+        return anim;
+      });
+      await this.play(exit, frameAnim, ...movers, { runTime: 0.78 });
+      this.remove(b.row);
+      dropped.push(b.label);
+      st.dropped = dropped.join(' ');
     }
-    st.dropped = forbidden.join(' ');
-    await link(stripTok, dropped[0]!, ORANGE);
     const uaTok = await swapCode(
       'worker/viewer/fetchguard.ts', 20,
       "  out.set('user-agent', VIEWER_UA);",
       'VIEWER_UA', GOLD,
     );
-    const ua = mono('user-agent  ply-viewer/0.1.0', 0.44, GOLD).moveTo([0.4, -2.15]);
-    graphic.add(ua);
-    await this.play(new FadeIn(ua), { runTime: 0.35 });
-    await link(uaTok, ua, GOLD);
+    const ua = built[built.length - 1]!;
+    await this.play(new FadeOut(ua.value), { runTime: 0.22 });
+    // The credential names were the wide column. The rows that remain close up around git-protocol.
+    const keptNameW = Math.max(...card.rows.map((r) => (r.children[0] as Text).advance()));
+    const ghost = mono('ply-viewer/0.1.0', ROW_FS, GOLD, 'start');
+    const measures = card.rows.map((r) => {
+      const copy = r.copy();
+      const name = copy.children[0] as Text;
+      const value = copy.children[1] as Text | undefined;
+      if (value) value.moveTo([name.left()[0] + keptNameW + COL, name.center()[1]], LEFT);
+      else {
+        const g = ghost.copy();
+        g.moveTo([name.left()[0] + keptNameW + COL, name.center()[1]], LEFT);
+        copy.add(g);
+      }
+      return copy;
+    });
+    const grown = card.plan(measures, 'top');
+    const uaIndex = card.rows.indexOf(ua.row);
+    const anchor = grown.anchors[uaIndex]!;
+    const home = uaTok.copy();
+    const parent = uaTok.parent;
+    // Stop outside the finished card. A straight flight from the code line
+    // crosses accept and git-protocol on the way into the value.
+    const door = uaTok.copy();
+    const finalRight = grown.frameCenter[0] + grown.width / 2;
+    const doorX = Math.max(card.frame.right()[0], finalRight) + 0.4 + uaTok.width() / 2;
+    door.moveTo([doorX, anchor[1]]);
+    const fly = new Transform(uaTok, door, { pathFunc: elbow });
+    fly.rateFunc = linear;
+    await this.play(fly, { runTime: 0.72 });
+    // Join the row, then take the value's place as the card opens around it.
+    ua.row.add(uaTok);
+    const uaTarget = ua.row.copy();
+    const tokT = uaTarget.children[1] as Text;
+    tokT.setText('ply-viewer/0.1.0');
+    tokT.setFill(GOLD);
+    tokT.scale(ghost.height() / tokT.height());
+    const nameT = uaTarget.children[0] as Text;
+    tokT.moveTo([nameT.left()[0] + keptNameW + COL, nameT.center()[1]], LEFT);
+    uaTarget.moveTo(anchor, LEFT);
+    const grow = new Transform(card.frame, card.frameTarget(grown));
+    const shiftRows = card.rows.filter((r) => r !== ua.row).map((r) => {
+      const at = grown.anchors[card.rows.indexOf(r)]!;
+      const target = r.copy();
+      const name = target.children[0] as Text;
+      const value = target.children[1] as Text | undefined;
+      if (value) value.moveTo([name.left()[0] + keptNameW + COL, name.center()[1]], LEFT);
+      target.moveTo(at, LEFT);
+      return new Transform(r, target);
+    });
+    await this.play(new Transform(ua.row, uaTarget), grow, ...shiftRows, { runTime: 0.85 });
+    if (parent) {
+      await this.play(new FadeIn(home), { runTime: 0.28 });
+      this.remove(home);
+      parent.add(home);
+    }
+    await link(home, uaTok, GOLD, 'side');
     await this.wait(0.35);
 
     // ---- refs: the real ls-refs body, then its 438 ms bar -------------------
@@ -413,7 +527,8 @@ export class PlyViewerScene extends Scene {
       ...context.map((g, i) => g.animate.moveTo([4.1, 0.35 - i * 0.75])),
       { runTime: 1.6 },
     );
-    const also = mono('0001  ·  0009peel  ·  000csymrefs', 0.34, DIM).moveTo([-2.4, -1.55]);
+    // Below the bar. On the bar's row it read as a second duration.
+    const also = mono('0001  ·  0009peel  ·  000csymrefs', 0.32, DIM).moveTo([0.2, -3.3]);
     graphic.add(also);
     await this.play(new FadeIn(also), { runTime: 0.25 });
     st.pkt = '0014command=ls-refs 0001 0009peel 000csymrefs 0014ref-prefix HEAD 001bref-prefix refs/heads/ 0000';
@@ -432,16 +547,18 @@ export class PlyViewerScene extends Scene {
     );
     const treePktText = pktLine('filter tree:0\n');
     const { flown: treePkt, home: treeHome } = await depart(fetchTok, [-2.4, 1.15], {
-      text: treePktText.hex + treePktText.body, color: GREEN, runTime: 1.15,
+      text: `${treePktText.hex} ${treePktText.body}`, color: GREEN, runTime: 1.15,
     });
     await link(treeHome, treePkt, GREEN);
-    const wall = new Rectangle({ width: 0.16, height: 1.7, fill: RED, stroke: 'none', fillOpacity: 0.95 }).moveTo([3.15, 1.15]);
+    const wall = new Rectangle({ width: 0.18, height: 1.85, fill: RED, stroke: 'none', fillOpacity: 0.95 }).moveTo([4.9, 1.15]);
     graphic.add(wall);
     await this.play(new FadeIn(wall), { runTime: 0.25 });
-    await this.play(treePkt.animate.moveTo([1.7, 1.15]), { runTime: 0.7 });
-    const http400 = mono('400', 0.52, RED).moveTo([4.7, 1.15]);
+    // Rest short of the wall. A packet that stops on the wall overlaps it.
+    const approachX = wall.left()[0] - 0.45 - treePkt.width() / 2;
+    await this.play(treePkt.animate.moveTo([approachX, 1.15]), { runTime: 0.7 });
+    const http400 = mono('400', 0.52, RED).moveTo([wall.right()[0] + 0.7, 1.15]);
     graphic.add(http400);
-    await this.play(treePkt.animate.moveTo([-0.4, 1.15]), new FadeIn(http400), { runTime: 0.45 });
+    await this.play(treePkt.animate.moveTo([approachX - 2.3, 1.15]), new FadeIn(http400), { runTime: 0.45 });
     const treeBar = await growBar(1, 443, 438, GREEN, 'tree:0');
     const statusAt: [number, number] = [4.2, barY[1]!];
     await this.play(http400.animate.moveTo(statusAt).scale(0.85), { runTime: 0.7 });
@@ -462,11 +579,13 @@ export class PlyViewerScene extends Scene {
     );
     const blobPktText = pktLine('filter blob:none\n');
     const { flown: blobPkt, home: blobHome } = await depart(retryTok, [-1.6, 1.15], {
-      text: blobPktText.hex + blobPktText.body, color: TEAL, runTime: 1.05,
+      text: `${blobPktText.hex} ${blobPktText.body}`, color: TEAL, runTime: 1.05,
     });
     await link(blobHome, blobPkt, TEAL);
-    await this.play(blobPkt.animate.moveTo([1.7, 1.15]), { runTime: 0.85 });
-    const http200 = mono('200', 0.52, TEAL).moveTo([6.35, 1.15]);
+    // The retry crosses. The wall leaves in the same play, so the packet never rests on it.
+    const landX = Math.min(1.2, 6.4 - blobPkt.width());
+    await this.play(blobPkt.animate.moveTo([landX, 1.15]), new FadeOut(wall), { runTime: 0.85 });
+    const http200 = mono('200', 0.52, TEAL).moveTo([landX + blobPkt.width() / 2 + 0.85, 1.15]);
     graphic.add(http200);
     await this.play(new FadeIn(http200), { runTime: 0.3 });
     const blobBar = await growBar(2, 505, 881, TEAL, 'blob:none');
@@ -510,7 +629,7 @@ export class PlyViewerScene extends Scene {
     ];
     const markText: Text[] = [];
     // Side by side under the bar. nextTo each segment would pile @383 onto @566.
-    const markY = -0.15;
+    const markY = 0.18;
     const markX = [-5.1, -0.4, 4.3];
     for (const [n, [index, text, color]] of marks.entries()) {
       const t = mono(text, 0.38, color);
@@ -518,12 +637,13 @@ export class PlyViewerScene extends Scene {
       graphic.add(t);
       markText.push(t);
       await this.play(new FadeIn(t), { runTime: 0.2 });
-      await link(t, segs[index]!, color);
     }
-    const legend = mono('930 B · 9 objects · header commit tree blob tag ofs-delta ref-delta trailer', 0.32, DIM);
-    legend.moveTo([0, -0.85]);
-    graphic.add(legend);
-    await this.play(new FadeIn(legend), { runTime: 0.3 });
+    // Two short lines. One long legend shared the clock's baseline and read as "trailer 1386 ms".
+    const legendA = mono('930 B · 9 objects', 0.36, DIM).moveTo([0, -0.52]);
+    const legendB = mono('header   commit   tree   blob', 0.3, DIM, 'start').moveTo([-7.05, -1.12], LEFT);
+    const legendC = mono('tag   ofs-delta   ref-delta   trailer', 0.3, DIM, 'start').moveTo([-7.05, -1.68], LEFT);
+    graphic.add(legendA, legendB, legendC);
+    await this.play(new FadeIn(legendA), new FadeIn(legendB), new FadeIn(legendC), { runTime: 0.3 });
     st.pack = '930 B @12 371 @383 183 @566 108';
     await link(offTok, segs[1]!, BLUE);
     await this.wait(0.25);
@@ -531,14 +651,16 @@ export class PlyViewerScene extends Scene {
     // ---- delta: the ref-delta points at its base, then applyDelta resolves it
     await this.step('delta', { caption: 'The ref-delta names its base. applyDelta makes a commit.', file: 'src/packresolve.js', line: 51 });
     await clearLinks();
-    await dim([legend, markText[2]!, ...segs.filter((_, i) => i !== 1 && i !== 2)]);
+    await dim([legendA, legendB, legendC, markText[2]!, ...segs.filter((_, i) => i !== 1 && i !== 2)]);
     const baseTok = await swapCode(
       'src/packresolve.js', 51,
       '      baseOid = toHex(buf.subarray(p, p + 20)); p += 20;',
       'baseOid', RED,
     );
-    const arc = new CurvedArrow(segs[2]!.top(), segs[1]!.top(), {
-      angle: -Math.PI / 3, stroke: RED, strokeWidth: 0.045, tipLength: 0.22, tipWidth: 0.16,
+    const baseTop = segs[2]!.top();
+    const commitTop = segs[1]!.top();
+    const arc = new CurvedArrow([baseTop[0], baseTop[1] + 0.32], [commitTop[0], commitTop[1] + 0.32], {
+      angle: Math.PI / 5, stroke: RED, strokeWidth: 0.045, tipLength: 0.2, tipWidth: 0.14,
     });
     graphic.add(arc);
     await this.play(new Create(arc), { runTime: 0.8 });
@@ -551,7 +673,8 @@ export class PlyViewerScene extends Scene {
     const resolved = mono('commit', 0.38, BLUE).moveTo(markText[1]!);
     await this.play(segs[2]!.animate.setFill(BLUE), new Transform(markText[1]!, resolved), { runTime: 0.7 });
     st.delta = '@383 -> @12 chain 1';
-    await link(applyTok, segs[2]!, BLUE);
+    // The side, so the line comes in beside the arc instead of through it.
+    await link(applyTok, segs[2]!, BLUE, 'side');
     await this.wait(0.35);
 
     // ---- trace: span() is the clock the three bars already grew on ---------
@@ -563,13 +686,13 @@ export class PlyViewerScene extends Scene {
       '  async span(name, opts, fn) {',
       'span', GOLD,
     );
-    await link(spanTok, refsBar.bar, TEAL);
-    await link(spanTok, treeBar.bar, GREEN);
-    await link(spanTok, blobBar.bar, TEAL);
-    const pill = mono('3 upstream calls · 1.4 s · 1 retry', 0.42, GOLD).moveTo([0, 1.15]);
+    const pill = mono('3 upstream calls · 1.4 s · 1 retry', 0.42, GOLD).moveTo([0, 1.35]);
     graphic.add(pill);
     await this.play(new FadeIn(pill), { runTime: 0.35 });
-    await link(spanTok, pill, GOLD);
+    await link(spanTok, pill, GOLD, 'facing');
+    await link(pill, refsBar.bar, TEAL);
+    await link(pill, treeBar.bar, GREEN);
+    await link(pill, blobBar.bar, TEAL);
     await this.wait(0.4);
 
     // ---- the whole read, pulled back ---------------------------------------

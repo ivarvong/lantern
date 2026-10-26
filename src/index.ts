@@ -9,6 +9,8 @@ export { VMobject } from './vmobject.ts';
 export { Arc, ArcBetweenPoints, Arrow, Circle, CurvedArrow, Dot, Labeled, Line, Polygon, Rectangle, Square } from './shapes.ts';
 export type { RectangleOpts, SquareOpts, CircleOpts, DotOpts, ArrowOpts, ArcOpts, CurvedArrowOpts } from './shapes.ts';
 export { Text, DecimalNumber, Code } from './text.ts';
+export { Card, route, obstacles } from './layout.ts';
+export type { CardOpts, CardPlan, RouteOpts } from './layout.ts';
 export type { TextOpts, DecimalNumberOpts, CodeOpts } from './text.ts';
 export { title, CodePanel, StateReadout } from './panels.ts';
 export { Flowchart, flowchart, FLOWCHART_THEME } from './flowchart.ts';
