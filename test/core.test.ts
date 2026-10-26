@@ -72,6 +72,15 @@ test('animate builder + Arrow + Text serialize', async () => {
   assert.ok((svg.match(/<path/g) || []).length >= 3 + 'handler'.length);
 });
 
+test('a scene camera sets the svg viewBox', async () => {
+  const scene = new Scene(new StringSink());
+  scene.frame = { w: 9, h: 18 };
+  scene.add(new Text('a'));
+  const svg = toSvgString(scene, { width: 100 });
+  assert.match(svg, /viewBox="-4500 -9000 9000 18000"/);
+  assert.match(svg, /height="200"/);
+});
+
 test('text is centered on its advance box, and that box sits inside a label', () => {
   const t = new Text('Hg', { fontSize: 0.4 });
   const b = t.box()!;

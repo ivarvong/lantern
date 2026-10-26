@@ -198,7 +198,7 @@ export class JustBashScene extends Scene {
       '  "/home/user"           => %{type: :directory, mode: 0o755},',
       '',
       '}}',
-    ], { fontSize: 0.22 }).moveTo([4.0, -1.0]);
+    ], { fontSize: 0.22 }).moveTo([3.4, -1.0]);
     const entrySlot = 2 * fsBox.lines[2]!.center()[1] - fsBox.lines[1]!.center()[1]; // the blank 4th line
     const bend = new Arrow(outStr.right(), [fsBox.left()[0] - 0.25, entrySlot], { stroke: GOLD, buff: 0.15 });
     await this.play(new FadeIn(stage), new FadeIn(outStr), new FadeIn(fsBox, { shift: [0.2, 0] }), { runTime: 0.6 });

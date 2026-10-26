@@ -17,11 +17,14 @@
 //   ghost      two texts overlap while both are only partly opaque (a crossfade)
 //   overflow   a label whose center sits in its shape sticks out of that shape
 //   pierce     a connector crosses a glyph run or a box edge away from its ends
-//   fill       a box's contents sit in one corner of it (the box was not sized to them)
+//   fill       a box's contents sit in one corner of it (the box was not sized to them),
+//              or a portrait camera's settled picture covers less than PHONE_CANVAS_FILL
+//              of the frame height (a phone canvas with the scene piled at the top)
 //   overlap    two settled shapes occupy the same space, and neither declares it
 //   margin     two settled texts are closer than the minimum gap
 //   intrude    a moving text that belongs to no box crosses a label inside one
 //              (a token flying through a card's rows, not into an empty slot)
+//   clip       settled text runs past the camera (the viewport cuts a glyph)
 //
 // A cut-out and cut-in in the same frame with matching boxes is a seamless
 // handoff and is not reported. Every event carries the step it happened in.
@@ -48,7 +51,19 @@ export interface MotionOptions {
 export interface LeafSample { cx: number; cy: number; w: number; h: number; a: number; box: Box }
 export interface MotionFrame { t: number; step: string | null; leaves: Map<number, LeafSample> }
 
-export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'overlap' | 'margin' | 'intrude';
+export type MotionKind = 'teleport' | 'resize' | 'pop' | 'cut-in' | 'cut-out' | 'flicker' | 'handoff' | 'ghost' | 'overflow' | 'pierce' | 'fill' | 'overlap' | 'margin' | 'intrude' | 'clip';
+
+/**
+ * A portrait camera must keep its picture across this fraction of the frame
+ * height. A phone canvas with the scene in the top quarter fails.
+ */
+export const PHONE_CANVAS_FILL = 0.6;
+
+/** A one-frame gap between animations is not a picture. A held sparse frame is. */
+const CANVAS_FILL_HOLD = 0.18;
+
+/** Ink may sit this close to the camera edge without counting as clipped. */
+const CLIP_SLACK = 0.12;
 export interface MotionEvent { kind: MotionKind; frame: number; t: number; step: string | null; what: string; magnitude: number; detail: string }
 export interface MotionSummary { kind: MotionKind; step: string | null; frame: number; t: number; count: number; max: number; examples: string[] }
 
@@ -87,7 +102,12 @@ export class MotionSink implements Sink {
   /** Text-layout failures sampled while the scene runs. One per offending mobject. */
   layoutEvents: MotionEvent[];
   private layoutSeen: Set<string>;
-  constructor() { this.frames = []; this.labels = new Map(); this.layoutEvents = []; this.layoutSeen = new Set(); }
+  /** When the current portrait picture first settled below PHONE_CANVAS_FILL. */
+  private canvasLowSince: number | null;
+  constructor() {
+    this.frames = []; this.labels = new Map(); this.layoutEvents = []; this.layoutSeen = new Set();
+    this.canvasLowSince = null;
+  }
   async frame(scene: Scene): Promise<void> {
     const f = new Map<number, LeafSample>();
     const walk = (m: Mobject): void => {
@@ -491,6 +511,64 @@ export class MotionSink implements Sink {
         if (inter <= 0.02) continue;
         note('overlap', `overlap:r${Math.min(A.m.id, B.m.id)}:r${Math.max(A.m.id, B.m.id)}`, `Rectangle#${A.m.id} × Rectangle#${B.m.id}`, inter, 'two boxes occupy the same space');
       }
+    }
+
+    const cam = scene.frame;
+    const hx = cam.w / 2, hy = cam.h / 2;
+    for (const g of glyphRuns) {
+      if (shown(g.m) < 0.9) continue;
+      const s = leaf(g.m);
+      if (!s || !this.resting(g.m.id, s.cx, s.cy, s.w, s.h)) continue;
+      const past = Math.max(-hx - g.box[0], -hy - g.box[1], g.box[2] - hx, g.box[3] - hy, 0);
+      if (past <= CLIP_SLACK) continue;
+      // Off-camera text (a column the camera has panned away from) is not a cut.
+      // A cut is a glyph the viewer can still read, with the rest past the edge.
+      const visW = Math.min(g.box[2], hx) - Math.max(g.box[0], -hx);
+      const visH = Math.min(g.box[3], hy) - Math.max(g.box[1], -hy);
+      if (visW < 0.2 || visH < 0.08) continue;
+      note('clip', `clip:${g.m.id}`, `"${g.m.text.slice(0, 28)}"`, past, `text runs ${past.toFixed(2)} past the frame`);
+    }
+
+    // Portrait only. A 16:9 scene is a different camera; this is the phone canvas.
+    if (!(cam.h > cam.w)) { this.canvasLowSince = null; return; }
+    // Opacity, not fillOpacity: a card filled at a few percent is fully on screen.
+    // A fade that has not landed — even a first frame at nearly zero — is the
+    // picture still arriving, so a settled code line is not the whole frame.
+    const revealOf = (m: Mobject): number => (m.style.opacity ?? 1) * (m.style.drawFraction ?? 1);
+    let flux = false;
+    const watch = (m: Mobject): void => {
+      if (flux) return;
+      const unit = m.mergeLeaves && m.children.length > 0;
+      const drawn = unit || (m instanceof VMobject && m.hasPoints());
+      if (drawn) {
+        const rev = unit ? Math.max(...m.children.map(revealOf)) : revealOf(m);
+        if (rev > 0 && rev < 0.98) flux = true;
+        else if (rev >= 0.98) {
+          const s = leaf(m);
+          if (s && !this.resting(m.id, s.cx, s.cy, s.w, s.h)) flux = true;
+        }
+      }
+      if (!unit && !flux) for (const c of m.children) watch(c);
+    };
+    for (const top of scene.mobjects) watch(top);
+    if (flux) { this.canvasLowSince = null; return; }
+    let minY = Infinity, maxY = -Infinity, nText = 0;
+    for (const g of glyphRuns) {
+      if (shown(g.m) < 0.85) continue;
+      minY = Math.min(minY, g.box[1]); maxY = Math.max(maxY, g.box[3]); nText++;
+    }
+    for (const r of rects) {
+      if (area(r.box) < 0.08) continue;
+      minY = Math.min(minY, r.box[1]); maxY = Math.max(maxY, r.box[3]);
+    }
+    if (nText < 1 || minY === Infinity) { this.canvasLowSince = null; return; }
+    const span = maxY - minY;
+    const need = PHONE_CANVAS_FILL * cam.h;
+    if (span + 1e-3 >= need) { this.canvasLowSince = null; return; }
+    if (this.canvasLowSince == null) this.canvasLowSince = t;
+    else if (t - this.canvasLowSince >= CANVAS_FILL_HOLD) {
+      const ratio = span / cam.h;
+      note('fill', 'fill:canvas', 'canvas', +(need - span).toFixed(3), `canvas fill ${ratio.toFixed(2)} < ${PHONE_CANVAS_FILL} (content spans ${span.toFixed(2)} of ${cam.h.toFixed(2)})`);
     }
   }
 }

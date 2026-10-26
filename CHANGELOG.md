@@ -4,8 +4,13 @@
 
 - Layout: `Card` sizes a box to its rows, and `route` draws a connector that meets an edge
   without crossing text or another box. `verify:motion` rejects a frame that breaks
-  those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`). `intrude` is a text
-  sitting inside a box it is not part of, including mid-flight.
+  those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`, `clip`). `intrude` is a text
+  sitting inside a box it is not part of, including mid-flight. `clip` is text past the camera.
+  On a portrait camera, `fill` also fails when the settled picture covers less than
+  `PHONE_CANVAS_FILL` (0.6) of the frame height.
+- A scene can set `frame` to a camera other than 16:9. The player follows that aspect.
+- A connector that starts in the clearance beside a wrapped line can leave that gap
+  instead of falling back to a straight cut through the line.
 - TypeScript: the library, scenes, player, Worker, tools and tests are strict TypeScript.
   The package ships `dist/` (ESM, `.d.ts`, declaration maps) compiled by `tsc`; option,
   document and trace types (`Doc`, `TextOpts`, `StepRecord`, ...) are exported from the

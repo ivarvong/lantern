@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT } from '../src/index.ts';
+import { Scene, Group, Rectangle, Circle, Text, Labeled, FadeIn, FadeOut, Transform, Create, MoveAlongPath, Line, Card, route, MotionSink, analyzeMotion, linear, RIGHT, LEFT, PHONE_CANVAS_FILL } from '../src/index.ts';
 import type { MoveAlongPathOpts } from '../src/index.ts';
 
 // Caption holds are thousands of identical frames; the hold rule has its own test
@@ -226,6 +226,49 @@ test('stacked texts closer than the minimum gap are a margin error', async () =>
     await s.wait(0.2);
   });
   assert.deepEqual(led, []);
+});
+
+test('PHONE_CANVAS_FILL is the portrait occupancy floor', () => {
+  assert.equal(PHONE_CANVAS_FILL, 0.6);
+});
+
+test('a portrait frame fails fill when the picture stays in a short band', async () => {
+  const phone = { w: 16, h: 16 * (844 / 390) };
+  const sparse = await run(async (s) => {
+    s.frame = phone;
+    const a = new Text('host github.com', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 2]);
+    const b = new Text('0001', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 3.4]);
+    s.add(a, b);
+    await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.25 });
+    await s.wait(0.45);
+  });
+  assert.ok(sparse.includes('fill'), `expected canvas fill, got ${sparse}`);
+  const spread = await run(async (s) => {
+    s.frame = phone;
+    const a = new Text('code', { font: 'mono', fontSize: 0.7 }).moveTo([0, phone.h / 2 - 1.6]);
+    const b = new Text('host github.com', { font: 'mono', fontSize: 0.8 }).moveTo([0, -phone.h / 2 + 1.6]);
+    s.add(a, b);
+    await s.play(new FadeIn(a), new FadeIn(b), { runTime: 0.25 });
+    await s.wait(0.45);
+  });
+  assert.ok(!spread.includes('fill'), `portrait picture that spans the frame should pass, got ${spread}`);
+  const wide = await run(async (s) => {
+    const a = new Text('only at the top', { fontSize: 0.5 }).moveTo([0, 3.2]);
+    s.add(a);
+    await s.play(new FadeIn(a), { runTime: 0.2 });
+    await s.wait(0.45);
+  });
+  assert.ok(!wide.includes('fill'), `16:9 camera is not the phone fill check, got ${wide}`);
+});
+
+test('settled text past the camera is clip', async () => {
+  const kinds = await run(async (s) => {
+    const t = new Text('clipped-token', { font: 'mono', fontSize: 0.6 }).moveTo([7.6, 0]);
+    s.add(t);
+    await s.play(new FadeIn(t), { runTime: 0.2 });
+    await s.wait(0.3);
+  });
+  assert.ok(kinds.includes('clip'), `expected clip, got ${kinds}`);
 });
 
 test('every example scene is free of motion discontinuities', async () => {

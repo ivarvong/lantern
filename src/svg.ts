@@ -11,7 +11,11 @@ import { perf } from './perf.ts';
 export const FRAME = { w: 16, h: 9 } as const;
 /** SVG user units per scene unit: lengths are emitted as integers (see VMobject.formatPathD). */
 export const UNITS = 1000;
-const VIEWBOX = `${-FRAME.w / 2 * UNITS} ${-FRAME.h / 2 * UNITS} ${FRAME.w * UNITS} ${FRAME.h * UNITS}`;
+
+/** viewBox for a camera. The default camera is `FRAME`. */
+export function viewBoxOf(frame: { w: number; h: number } = FRAME): string {
+  return `${-frame.w / 2 * UNITS} ${-frame.h / 2 * UNITS} ${frame.w * UNITS} ${frame.h * UNITS}`;
+}
 /** A length in integer user units. */
 const len = (x: number): string => '' + Math.round(x * UNITS);
 
@@ -197,15 +201,16 @@ function serializeElement(el: ElementRecord): string {
 }
 
 export interface SvgOptions {
-  /** Pixel width; height follows the 16:9 frame. */
+  /** Pixel width; height follows the scene's camera. */
   width?: number;
   background?: string;
 }
 
 export function toSvgString(scene: Scene, { width = 1280, background = '#1a1a1a' }: SvgOptions = {}): string {
-  const height = Math.round(width * FRAME.h / FRAME.w);
-  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${VIEWBOX}">`;
-  s += `<rect x="${-FRAME.w / 2 * UNITS}" y="${-FRAME.h / 2 * UNITS}" width="${FRAME.w * UNITS}" height="${FRAME.h * UNITS}" fill="${background}"/>`;
+  const frame = scene.frame ?? FRAME;
+  const height = Math.round(width * frame.h / frame.w);
+  let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBoxOf(frame)}">`;
+  s += `<rect x="${-frame.w / 2 * UNITS}" y="${-frame.h / 2 * UNITS}" width="${frame.w * UNITS}" height="${frame.h * UNITS}" fill="${background}"/>`;
   const els = renderElements(scene);
   const end = perf.begin('render.serialize');
   const parts = [s];
@@ -268,7 +273,7 @@ export class DomSink implements Sink {
     // A container in a live document always has one
     this.doc = container.ownerDocument!;
     this.svg = this.doc.createElementNS(NS, 'svg');
-    this.svg.setAttribute('viewBox', VIEWBOX);
+    this.svg.setAttribute('viewBox', viewBoxOf());
     this.svg.style.background = background;
     this.svg.style.width = '100%';
     this.svg.style.display = 'block';
@@ -309,6 +314,11 @@ export class DomSink implements Sink {
   }
 
   patch(scene: Scene, presentAt: number): void {
+    const frame = scene.frame ?? FRAME;
+    const vb = viewBoxOf(frame);
+    if (this.svg.getAttribute('viewBox') !== vb) this.svg.setAttribute('viewBox', vb);
+    // The stage follows the camera. A portrait scene is not letterboxed into 16:9.
+    this.svg.parentElement?.classList.toggle('portrait', frame.h > frame.w);
     // Absolute path data: measured faster for live DOM patching than translate + relative
     this.apply(renderElements(scene, { relative: false }), presentAt, scene.time);
   }

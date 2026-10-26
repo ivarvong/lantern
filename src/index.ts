@@ -26,7 +26,7 @@ export type { AnimOpts, PlayOpts, Playable, TransformOpts, FadeOpts, IndicateOpt
 export { linear, smooth, rushInto, rushFrom, thereAndBack, easeInQuad, easeOutQuad, easeOutBack, wiggle } from './rate.ts';
 export type { RateFunc } from './rate.ts';
 export { Scene } from './scene.ts';
-export type { Sink, Step, StepMeta, SceneOptions, SceneState, SceneClass } from './scene.ts';
+export type { Sink, Step, StepMeta, SceneOptions, SceneState, SceneClass, FrameSize } from './scene.ts';
 export { DocScene, sceneFromDoc } from './doc.ts';
 export type { Doc, DocStep, DocOp, DocNodeSpec, DocEdgeSpec, At, DocSceneOptions } from './doc.ts';
 
@@ -50,5 +50,5 @@ export type { Trace, StepRecord } from './trace.ts';
 
 // Diagnostics
 export { perf } from './perf.ts';
-export { MotionSink, analyzeMotion, summarizeMotion } from './verify.ts';
+export { MotionSink, analyzeMotion, summarizeMotion, PHONE_CANVAS_FILL } from './verify.ts';
 export type { MotionEvent, MotionOptions, MotionSummary } from './verify.ts';

@@ -24,7 +24,7 @@ const EXPECTED = [
   // time
   'NullSink', 'SeekSink', 'indexScene', 'stepTime', 'renderAt', 'TraceSink', 'traceScene',
   // diagnostics
-  'perf', 'MotionSink', 'analyzeMotion', 'summarizeMotion',
+  'perf', 'MotionSink', 'analyzeMotion', 'summarizeMotion', 'PHONE_CANVAS_FILL',
 ].sort();
 
 test('the public API is exactly the documented set of names', () => {

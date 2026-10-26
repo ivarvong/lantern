@@ -39,6 +39,14 @@ button:focus-visible, select:focus-visible, .scrubber:focus-visible { outline: 2
 .player { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
 .stage { background: #0a0a0a; position: relative; }
 .stage-svg { aspect-ratio: 16 / 9; }
+/* A portrait scene is its own camera, not a 16:9 strip on a black page.
+   Cap the column so the whole frame, including the trace at the bottom, stays
+   on screen above the transport. */
+.stage-svg.portrait {
+  aspect-ratio: 390 / 844;
+  width: min(100%, 440px, calc((100dvh - 230px) * 390 / 844));
+  margin-inline: auto;
+}
 .stage-svg svg { display: block; width: 100%; height: 100%; }
 .loading .stage-svg { opacity: .35; transition: opacity .2s; }
 .loading .stage::after { content: ""; position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; border: 2px solid #333; border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }

@@ -260,6 +260,7 @@ export function mountPlayer(root: HTMLElement): void {
     };
     const { Scene } = SCENES[current]!;
     const scene = new Scene(sink, { fps: 30, skipUntil: startAt });
+    stageInner.classList.toggle('portrait', scene.frame.h > scene.frame.w);
     try { await scene.run(); } catch (e) { if (!(e instanceof Abort)) throw e; return; }
     if (gen === generation) { setTime(index.duration); setPaused(true); root.classList.add('ended'); }
   }

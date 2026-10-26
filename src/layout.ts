@@ -13,7 +13,7 @@ import { Arc, Line, Rectangle } from './shapes.ts';
 import type { Vec } from './vec.ts';
 import { Text } from './text.ts';
 
-/** Distances in scene units. The frame is 16 × 9. */
+/** Distances in scene units. The default camera is 16 × 9; a portrait scene passes its own bounds. */
 export const LAYOUT = {
   // Close enough to shave a glyph or a border. Diagrams already keep a smaller
   // gap than this between a node and the arrow that stops at its edge; the
@@ -159,6 +159,11 @@ export function anchorPoint(mob: Mobject, other: Mobject, rects: readonly Box[],
   const dx = o[0] - c[0], dy = o[1] - c[1];
   const xOn = Math.min(b[2] - 0.04, Math.max(b[0] + 0.04, o[0]));
   const yOn = Math.min(b[3] - 0.04, Math.max(b[1] + 0.04, o[1]));
+  // 'side' is the left or right end, including a bare token that is not inside a card.
+  if (dock === 'side') {
+    const left = Math.abs(o[0] - b[0]) <= Math.abs(o[0] - b[2]);
+    return left ? [b[0] - pad, yOn] : [b[2] + pad, yOn];
+  }
   if (Math.abs(dy) >= Math.abs(dx) * 0.65) return dy > 0 ? [xOn, b[3] + pad] : [xOn, b[1] - pad];
   return dx > 0 ? [b[2] + pad, yOn] : [b[0] - pad, yOn];
 }
@@ -191,11 +196,11 @@ function pathLength(points: readonly Vec[]): number {
 }
 
 /** Orthogonal routes around `boxes`. The first clear one wins; a grid search covers the rest. */
-export function routePoints(start: Vec, end: Vec, boxes: readonly Box[], clearance: number = LAYOUT.clearance): Vec[] {
-  return routeZones(start, end, boxes.map((box) => ({ box, clearance })));
+export function routePoints(start: Vec, end: Vec, boxes: readonly Box[], clearance: number = LAYOUT.clearance, bounds: { w: number; h: number } = { w: 16, h: 9 }): Vec[] {
+  return routeZones(start, end, boxes.map((box) => ({ box, clearance })), bounds);
 }
 
-function routeZones(start: Vec, end: Vec, zones: readonly Zone[]): Vec[] {
+function routeZones(start: Vec, end: Vec, zones: readonly Zone[], bounds: { w: number; h: number }): Vec[] {
   const elbows: Vec[][] = [
     [start, end],
     [start, [end[0], start[1]], end],
@@ -215,11 +220,11 @@ function routeZones(start: Vec, end: Vec, zones: readonly Zone[]): Vec[] {
   }
   const clear = elbows.map(dedupe).filter((p) => p.length >= 2 && pathClearZones(p, zones));
   if (clear.length) return clear.sort((a, b) => pathLength(a) - pathLength(b))[0]!;
-  const grid = gridRoute(start, end, zones);
+  const grid = gridRoute(start, end, zones, bounds);
   return grid ?? dedupe([start, end]);
 }
 
-function gridRoute(start: Vec, end: Vec, zones: readonly Zone[]): Vec[] | null {
+function gridRoute(start: Vec, end: Vec, zones: readonly Zone[], bounds: { w: number; h: number }): Vec[] | null {
   const step = 0.22;
   let minX = Math.min(start[0], end[0]) - 0.8, maxX = Math.max(start[0], end[0]) + 0.8;
   let minY = Math.min(start[1], end[1]) - 0.8, maxY = Math.max(start[1], end[1]) + 0.8;
@@ -228,8 +233,8 @@ function gridRoute(start: Vec, end: Vec, zones: readonly Zone[]): Vec[] | null {
     minX = Math.min(minX, b[0] - 0.8); maxX = Math.max(maxX, b[2] + 0.8);
     minY = Math.min(minY, b[1] - 0.8); maxY = Math.max(maxY, b[3] + 0.8);
   }
-  minX = Math.max(minX, -8.2); maxX = Math.min(maxX, 8.2);
-  minY = Math.max(minY, -4.6); maxY = Math.min(maxY, 4.6);
+  minX = Math.max(minX, -bounds.w / 2 - 0.2); maxX = Math.min(maxX, bounds.w / 2 + 0.2);
+  minY = Math.max(minY, -bounds.h / 2 - 0.2); maxY = Math.min(maxY, bounds.h / 2 + 0.2);
   const xs: number[] = [];
   const ys: number[] = [];
   for (let x = minX; x <= maxX + 1e-6; x += step) xs.push(Math.round(x * 100) / 100);
@@ -261,14 +266,45 @@ function gridRoute(start: Vec, end: Vec, zones: readonly Zone[]): Vec[] | null {
     add(p);
   }
   const neigh: number[][] = nodes.map(() => []);
+  // The anchor often sits in the clearance moat of the next line. One excused
+  // grid step cannot walk out of a moat that is wider than the word, so the
+  // search used to fail and the straight fallback cut through the line.
+  const inExpanded = (z: Zone, p: Vec): boolean =>
+    p[0] > z.box[0] - z.clearance && p[0] < z.box[2] + z.clearance &&
+    p[1] > z.box[1] - z.clearance && p[1] < z.box[3] + z.clearance;
+  const inInterior = (z: Zone, p: Vec): boolean =>
+    p[0] > z.box[0] && p[0] < z.box[2] && p[1] > z.box[1] && p[1] < z.box[3];
+  const moatAt = (p: Vec): number[] => {
+    const ids: number[] = [];
+    zones.forEach((z, i) => { if (inExpanded(z, p) && !inInterior(z, p)) ids.push(i); });
+    return ids;
+  };
+  const startMoat = new Set(moatAt(start));
+  const endMoat = new Set(moatAt(end));
+  const moatHop = (a: Vec, b: Vec, which: Set<number>): boolean => {
+    if (!which.size) return false;
+    let hit = false;
+    for (let i = 0; i < zones.length; i++) {
+      const z = zones[i]!;
+      if (segmentBlocked(a, b, z.box, 0, 0, 0)) return false;
+      if (!segmentBlocked(a, b, z.box, z.clearance, 0, 0)) continue;
+      if (!which.has(i)) return false;
+      hit = true;
+    }
+    return hit;
+  };
   const link = (i: number, j: number): void => {
     if (i === j) return;
     // Only the connector's own ends are attachments. A middle hop of one grid
     // step used to inherit the end pad and could run the length of a word.
+    const a = nodes[i]!, b = nodes[j]!;
     const pad0 = i === sId ? LAYOUT.endPad : 0;
     const pad1 = j === eId ? LAYOUT.endPad : 0;
-    if (hopBlocked(nodes[i]!, nodes[j]!, zones, pad0, pad1)) return;
-    neigh[i]!.push(j);
+    if (!hopBlocked(a, b, zones, pad0, pad1)) { neigh[i]!.push(j); return; }
+    // Only the hop that leaves the anchor may cross the moat it is already in.
+    const fromStart = i === sId || j === sId;
+    const fromEnd = i === eId || j === eId;
+    if ((fromStart && moatHop(a, b, startMoat)) || (fromEnd && moatHop(a, b, endMoat))) neigh[i]!.push(j);
   };
   // Orthogonal neighbors: same x or same y, adjacent in the sorted line.
   const byX = new Map<string, number[]>();
@@ -310,6 +346,8 @@ export interface RouteOpts {
   clearance?: number;
   /** 'side' meets a tall card at the row's height. 'facing' meets the near edge. */
   dock?: 'auto' | 'side' | 'facing';
+  /** Camera the route must stay inside. The default is the 16:9 stage. */
+  bounds?: { w: number; h: number };
 }
 
 /**
@@ -339,7 +377,7 @@ export function route(from: Mobject, to: Mobject, avoid: readonly Mobject[], opt
     if (!b || b[2] - b[0] < 0.02 || b[3] - b[1] < 0.02) continue;
     zones.push({ box: b, clearance: 0 });
   }
-  const points = routeZones(start, end, zones);
+  const points = routeZones(start, end, zones, opts.bounds ?? { w: 16, h: 9 });
   const lines: Line[] = [];
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i]!, b = points[i + 1]!;
