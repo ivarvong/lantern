@@ -8,11 +8,14 @@ jobs:
   check:
     runs-on: ubuntu-24.04  # playwright-core 1.56 has no build for 26.04
     timeout-minutes: 10
+    env:
+      CF_SEND_TELEMETRY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # cf needs Node ^22.23, ^24.22 or ^26.12. A bare major can resolve to an older cached release.
+          node-version: 24.22
           cache: npm
       - run: node tools/check-glyph.ts
       - run: npm ci
@@ -33,6 +36,8 @@ jobs:
           MERMAID_JS: node_modules/mermaid/dist/mermaid.min.js
       - run: npm run verify:motion  # no teleports, pops or cuts in any scene
       - run: npm run build
+      # Builds the Worker with out/site/ as its assets and validates the upload. No credentials, no API calls.
+      - run: npx cf deploy --dry-run
 # The playback gate (npm run verify:playback) measures frame pacing in a real
 # browser. Shared runners are too noisy for a 1% late-frame budget, so it runs
 # locally before merging changes to the renderer or player.

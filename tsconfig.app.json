@@ -1,6 +1,6 @@
 {
   // Browser and Worker code: the player (app/main.ts, bundled by esbuild), the
-  // Worker (app/worker.ts, bundled by wrangler) and the scenes they serve.
+  // Worker (app/worker.ts, bundled by cf build through Vite) and the scenes they serve.
   // Checked only; nothing is emitted. The Worker uses nothing beyond the fetch
   // API, which lib.dom types (see app/worker.ts on why not workers-types).
   "extends": "./tsconfig.base.json",

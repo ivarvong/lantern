@@ -14,7 +14,7 @@
 //
 // The library is runtime-agnostic; this file is the only Workers-specific code.
 // Seeking re-runs the scene to the requested time (~10ms), so nothing is
-// cached here; add Cache API or KV in front if you want. wrangler.toml runs
+// cached here; add Cache API or KV in front if you want. cloudflare.config.ts runs
 // this Worker first for "/" so it can negotiate; other asset paths skip it.
 //
 // Typed against the standard fetch API (lib.dom), not @cloudflare/workers-types:
@@ -24,7 +24,7 @@ import { indexScene } from '../src/index.ts';
 import { SCENES } from '../scenes/index.ts';
 import { CORS, handleGet, handlePost, isApiRoute, jsonResponse, lookupScene, methodNotAllowedResponse, preflight } from './scene-http.ts';
 
-/** The static-assets binding (wrangler.toml [assets]); absent in tests that don't need it. */
+/** The static-assets binding (bindings.assets() in cloudflare.config.ts); absent in tests that don't need it. */
 export interface Env {
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }

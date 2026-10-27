@@ -1,5 +1,5 @@
 // Build the player into single-file pages:
-//   out/site/index.html   Worker static asset (wrangler.toml)
+//   out/site/index.html   Worker static asset (vite.config.ts publicDir, served by cf build / cf deploy)
 //   out/demo.html         same page, open directly
 //   out/artifact.html     same page without the document skeleton (claude.ai artifact)
 //   --only=<scene>        one scene as its own page: out/<scene>.html and out/<scene>.artifact.html
