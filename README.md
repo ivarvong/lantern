@@ -110,7 +110,7 @@ docs/       PERF.md, VERIFY.md, DOC-FORMAT.md
 | steps and duration | `indexScene(Scene)`, or Worker `GET /index.json` |
 | every frame | `new StringSink({ width, background })`, Worker `POST /render` with `"format": "frames"`, or `npm run render` |
 
-Deploy: `npm run deploy` (builds `out/site/`, then `wrangler deploy`).
+Deploy: `npm run deploy` (builds `out/site/`, then `cf deploy`). `npm run worker:dry-run` builds and validates the Worker without credentials or an upload; `npm run worker:dev` serves the Worker and player locally with `cf dev`. Worker settings live in `cloudflare.config.ts`; `vite.config.ts` points the static assets at `out/site/`.
 
 ## HTTP API
 

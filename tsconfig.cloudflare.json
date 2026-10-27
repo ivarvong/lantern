@@ -1,0 +1,21 @@
+{
+  // The cf project files: cloudflare.config.ts and vite.config.ts. Checked against the Workers runtime types that
+  // `cf workers types` writes to .cloudflare/types (npm run check runs it first). Kept apart from the app project,
+  // which types the Worker against lib.dom (see app/worker.ts). Checked only; nothing is emitted.
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsc/cloudflare.tsbuildinfo"
+  },
+  "include": ["cloudflare.config.ts", "vite.config.ts", ".cloudflare/types"]
+}

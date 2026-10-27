@@ -19,10 +19,14 @@
     "verify:motion": "node tools/motion.ts",
     "verify:playback": "npm run build && node tools/playback.ts",
     "verify": "npm run verify:motion && npm run verify:playback && npm run verify:layout",
-    "deploy": "npm run build && npx wrangler deploy",
+    "deploy": "npm run build && cf deploy",
+    "worker:dev": "npm run build && cf dev",
+    "worker:build": "npm run build && cf build",
+    "worker:dry-run": "npm run build && cf deploy --dry-run",
+    "worker:types": "cf workers types",
     "fonts": "tools/fonts.sh",
-    "typecheck": "tsc -b",
-    "check": "tsc -b && tsc -p test/consumer/tsconfig.json",
+    "typecheck": "cf workers types && tsc -b",
+    "check": "cf workers types && tsc -b && tsc -p test/consumer/tsconfig.json",
     "transcript": "node tools/transcript.ts",
     "bench": "node tools/bench.ts",
     "types": "npm run build:lib",
@@ -30,10 +34,13 @@
     "verify:layout": "npm run build && node tools/layout.ts"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-beta.v.5",
     "@types/node": "24.19.2",
-    "esbuild": "0.25.12",
+    "cf": "1.0.0-beta.23",
+    "esbuild": "0.28.2",
     "playwright-core": "1.56.1",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vite": "8.3.5"
   },
   "description": "Animated, steppable code explainers. Zero-dependency JS engine, SVG output, browser and Cloudflare Workers.",
   "exports": {
