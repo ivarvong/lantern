@@ -10,6 +10,7 @@ import type { Animation, Playable, PlayOpts } from './animation.ts';
 import type { Mobject } from './mobject.ts';
 import { perf } from './perf.ts';
 import { loadFonts } from './fonts.ts';
+import { FRAME } from './svg.ts';
 
 /** Thrown by a sink to end the run early (seeking). */
 export class StopScene extends Error {}
@@ -71,6 +72,9 @@ function assertDisjoint(anims: readonly Animation[]): void {
   }
 }
 
+/** Width and height of the camera, in scene units. The default matches `FRAME` (16 × 9). */
+export interface FrameSize { w: number; h: number }
+
 export class Scene {
   sink: Sink;
   fps: number;
@@ -81,6 +85,11 @@ export class Scene {
   steps: Step[];
   current: Step | null;
   state: SceneState;
+  /**
+   * The camera. A portrait scene (a phone canvas) sets this in its constructor,
+   * before `run()` paints the first frame. The default is the 16:9 stage.
+   */
+  frame: FrameSize;
 
   /**
    * skipUntil: frames that end before this time are not rendered or
@@ -101,6 +110,7 @@ export class Scene {
     this.current = null;
     // The explanation's own state; describe() snapshots it for traces
     this.state = {};
+    this.frame = { w: FRAME.w, h: FRAME.h };
   }
 
   /** Subclasses define the animation here. */
@@ -177,9 +187,22 @@ export class Scene {
   familyMembers(): Mobject[] { return this.mobjects.flatMap((m) => m.family()); }
 
   add(...mobs: Mobject[]): this {
-    // Re-adding moves to the front; adding a child of something present is a no-op
-    this.mobjects = this.mobjects.filter((m) => !mobs.includes(m));
-    this.mobjects.push(...mobs);
+    // Re-adding moves to the front. A mobject drawn through a parent must not
+    // also be a root, or the renderer paints it twice (the smeared text).
+    // Adding a child of something already on screen is a no-op.
+    const covered = new Set<Mobject>();
+    for (const m of mobs) for (const f of m.family()) covered.add(f);
+    this.mobjects = this.mobjects.filter((m) => !covered.has(m));
+    const present = new Set<Mobject>();
+    for (const top of this.mobjects) for (const f of top.family()) present.add(f);
+    const roots: Mobject[] = [];
+    for (const m of mobs) {
+      if (present.has(m)) continue;
+      for (let i = roots.length - 1; i >= 0; i--) if (m.family().includes(roots[i]!)) roots.splice(i, 1);
+      roots.push(m);
+      for (const f of m.family()) present.add(f);
+    }
+    this.mobjects.push(...roots);
     return this;
   }
 

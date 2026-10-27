@@ -111,8 +111,13 @@ export class Text extends Group {
     this.build(text, fontSize, {
       fill: color, fillOpacity, stroke: bold ? color : 'none', strokeWidth: bold ? BOLD_STROKE * fontSize : 0,
     });
-    // Centered on the origin, like every other mobject
-    this.shift([-this.run.width / 2, this.run.ascent - (this.run.ascent - this.run.descent) / 2]);
+    // Center the advance box on the origin, like every other mobject.
+    // build() leaves the baseline on y = 0 and the box at [0, -descent, width, ascent],
+    // so the typographic center sits (ascent - descent) / 2 above the origin.
+    // Scene glyphs are the embedded faces (see fonts.ts), not a DOM webfont:
+    // a face that fails to load on iOS never substitutes system metrics here,
+    // and nothing in this path uses dominant-baseline, alignment-baseline, or foreignObject.
+    this.shift([-this.run.width / 2, -(this.run.ascent - this.run.descent) / 2]);
   }
 
   /** Lay out glyphs with the pen at the origin and the baseline at y = 0. */

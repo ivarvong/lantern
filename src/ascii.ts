@@ -12,12 +12,15 @@ import type { VecLike } from './vec.ts';
 
 export interface TextGridOptions { cols?: number; rows?: number }
 
-export function renderText(scene: Scene, { cols = 96, rows = 27 }: TextGridOptions = {}): string {
-  const grid = Array.from({ length: rows }, () => new Array<string>(cols).fill(' '));
-  const sx = cols / FRAME.w, sy = rows / FRAME.h;
-  const X = (x: number) => Math.round((x + FRAME.w / 2) * sx);
-  const Y = (y: number) => Math.round((FRAME.h / 2 - y) * sy); // model y is up; rows go down
-  const put = (c: number, r: number, ch: string) => { if (r >= 0 && r < rows && c >= 0 && c < cols) grid[r]![c] = ch; };
+export function renderText(scene: Scene, { cols = 96, rows }: TextGridOptions = {}): string {
+  const frame = scene.frame ?? FRAME;
+  // The 16:9 default stays 96×27 so existing text dumps do not change shape.
+  const rowCount = rows ?? (frame.w === FRAME.w && frame.h === FRAME.h ? 27 : Math.max(12, Math.round(cols * frame.h / frame.w)));
+  const grid = Array.from({ length: rowCount }, () => new Array<string>(cols).fill(' '));
+  const sx = cols / frame.w, sy = rowCount / frame.h;
+  const X = (x: number) => Math.round((x + frame.w / 2) * sx);
+  const Y = (y: number) => Math.round((frame.h / 2 - y) * sy); // model y is up; rows go down
+  const put = (c: number, r: number, ch: string) => { if (r >= 0 && r < rowCount && c >= 0 && c < cols) grid[r]![c] = ch; };
   const visible = (m: Mobject) => m.style.opacity > 0.05;
 
   // Only called on mobjects with points, so the box exists

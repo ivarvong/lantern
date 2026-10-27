@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  Rectangle, Circle, Line, Arrow, Text, Group, Transform, FadeIn, Create,
+  Rectangle, Circle, Line, Arrow, Text, Group, Labeled, Transform, FadeIn, Create,
   Scene, StringSink, toSvgString, RIGHT, UP,
   loadFonts,
 } from '../src/index.ts';
@@ -70,6 +70,31 @@ test('animate builder + Arrow + Text serialize', async () => {
   assert.ok(!svg.includes('<text'), 'text is outlines, not <text>');
   // box + arrow line + tip + 7 glyphs
   assert.ok((svg.match(/<path/g) || []).length >= 3 + 'handler'.length);
+});
+
+test('a scene camera sets the svg viewBox', async () => {
+  const scene = new Scene(new StringSink());
+  scene.frame = { w: 9, h: 18 };
+  scene.add(new Text('a'));
+  const svg = toSvgString(scene, { width: 100 });
+  assert.match(svg, /viewBox="-4500 -9000 9000 18000"/);
+  assert.match(svg, /height="200"/);
+});
+
+test('text is centered on its advance box, and that box sits inside a label', () => {
+  const t = new Text('Hg', { fontSize: 0.4 });
+  const b = t.box()!;
+  assert.ok(Math.abs((b[0] + b[2]) / 2) < 1e-3, `horizontal center ${(b[0] + b[2]) / 2}`);
+  assert.ok(Math.abs((b[1] + b[3]) / 2) < 1e-3, `vertical center ${(b[1] + b[3]) / 2}`);
+  const label = new Text('filter tree:0', { fontSize: 0.36, font: 'mono' });
+  const rect = new Rectangle({ width: label.width() + 0.7, height: 0.9, strokeWidth: 0.05 });
+  new Labeled(rect, label);
+  const lb = label.box()!, rb = rect.box()!;
+  assert.ok(lb[1] > rb[1] + 0.04 && lb[3] < rb[3] - 0.04, `label ${[...lb]} rect ${[...rb]}`);
+  const svg = toSvgString(new Scene(new StringSink()).add(label) as unknown as Scene, { width: 320 });
+  // Normal-weight glyphs must not carry a stroke width: WebKit paints it as a second edge.
+  assert.match(svg, /stroke="none"/);
+  assert.equal(svg.includes('stroke-width'), false);
 });
 
 test('y is up in the model and flipped once, in path data', () => {

@@ -87,13 +87,39 @@ export class LanternScene extends Scene {
     };
     const token = (at: string, color = GOLD) => new Dot({ radius: 0.09, color }).moveTo(chart.node(at).shape.center());
     const light = (id: string, color: string) => new Indicate(chart.node(id).shape, { color, scaleFactor: 1.06 });
-    // A camera move: the chart is one mobject, so glide it until these nodes fill the frame
+    // A camera move: the chart is one mobject, so glide it until these nodes fill the frame.
+    // A neighbor whose label would land half on screen is pulled in too. Leaving it
+    // there cuts the word on the frame edge.
     const focus = (ids: string[], { w = 15.2, h = 8.3, maxZoom = 2.2 }: { w?: number; h?: number; maxZoom?: number } = {}) => {
-      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-      for (const id of ids) { const b = chart.node(id).box()!; x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); }
-      const k = Math.min(maxZoom, w / (x1 - x0 + 0.8), h / (y1 - y0 + 0.8));
-      st.camera = ids.join(',');
-      return chart.animate.shift([-(x0 + x1) / 2, -(y0 + y1) / 2]).scale(k, { aboutPoint: [0, 0] });
+      const members = new Set(ids);
+      const hx = this.frame.w / 2, hy = this.frame.h / 2;
+      for (let guard = 0; guard < 6; guard++) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const id of members) {
+          const b = chart.node(id).box()!;
+          x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
+        }
+        const k = Math.min(maxZoom, w / (x1 - x0 + 0.8), h / (y1 - y0 + 0.8));
+        const s: [number, number] = [-(x0 + x1) / 2, -(y0 + y1) / 2];
+        let grew = false;
+        for (const id of chart.nodeIds) {
+          if (members.has(id)) continue;
+          const b = chart.node(id).box();
+          if (!b) continue;
+          const X0 = k * (b[0] + s[0]), Y0 = k * (b[1] + s[1]), X1 = k * (b[2] + s[0]), Y1 = k * (b[3] + s[1]);
+          const past = Math.max(-hx - X0, -hy - Y0, X1 - hx, Y1 - hy, 0);
+          if (past <= 0.12) continue;
+          const visW = Math.min(X1, hx) - Math.max(X0, -hx);
+          const visH = Math.min(Y1, hy) - Math.max(Y0, -hy);
+          if (visW < 0.2 || visH < 0.08) continue;
+          members.add(id);
+          grew = true;
+        }
+        if (grew) continue;
+        st.camera = ids.join(',');
+        return chart.animate.shift(s).scale(k, { aboutPoint: [0, 0] });
+      }
+      throw new Error('focus() could not keep labels inside the frame');
     };
     const ALL = chart.nodeIds;
 

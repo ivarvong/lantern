@@ -52,7 +52,7 @@ export class StateMachineScene extends Scene {
       new Text('CONNECT', { fontSize: 0.2, font: 'mono', color: GREY }).nextTo(eConnect, UP, 0.08),
       new Text('OPENED', { fontSize: 0.2, font: 'mono', color: GREY }).nextTo(eOpen, [1, 0], 0.1),
       new Text('CLOSE', { fontSize: 0.2, font: 'mono', color: GREY }).nextTo(eClose, UP, 0.08),
-      new Text('ERROR', { fontSize: 0.2, font: 'mono', color: RED }).moveTo([-5.6, 0.1]),
+      new Text('ERROR', { fontSize: 0.2, font: 'mono', color: RED }).moveTo([-7.35, 0.15]),
     ];
 
     await this.play(new LaggedStart([idle, connecting, open, closed].map((s) => new FadeIn(s, { scale: 0.7 })), { lagRatio: 0.3 }), { runTime: 1.2 });

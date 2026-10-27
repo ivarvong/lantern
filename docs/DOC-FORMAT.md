@@ -31,7 +31,9 @@ Example: [scenes/ring-buffer.doc.json](../scenes/ring-buffer.doc.json), generate
 1. Step `intro`: the title is written, then nodes fade in, edges draw, and the code
    panel and readout fade in.
 2. Each step in `steps` begins (`await this.step(name, meta)`) and plays its ops in order.
-   An op is one `play()`; an **array of ops plays together**.
+   An op is one `play()`; an **array of ops plays together**. When that array both
+   removes and adds (or replaces a note), the removals finish first and the
+   additions play after, so two labels never crossfade.
 3. Hold for `outro` seconds (default 1.5).
 
 ## Nodes

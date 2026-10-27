@@ -238,37 +238,45 @@ export class DocScene extends Scene {
     await this.wait(doc.outro ?? 1.5);
   }
 
-  /** Each op in the list is played together, then any removals are applied. */
+  /**
+   * Each op in the list is played together, then any removals are applied.
+   * A fade-out and a fade-in in the same list do not share a frame: the
+   * outgoing text plays to completion, then the incoming text starts, so two
+   * labels never sit on top of each other at partial opacity.
+   */
   async runOps(ops: readonly DocOp[], _step: DocStep): Promise<void> {
-    const anims: Array<Animation | AnimateBuilderBase> = [];
+    const outAnims: Array<Animation | AnimateBuilderBase> = [];
+    const inAnims: Array<Animation | AnimateBuilderBase> = [];
     let runTime = 0.45;
+    let fadesOut = false, fadesIn = false;
     const after: Array<() => void> = [];
     for (const op of ops) {
       if ('wait' in op) { await this.wait(op.wait); continue; }
       if ('runTime' in op) runTime = op.runTime!;
       // A focus op without a code block is an authoring error, and throws here
-      if ('focus' in op) anims.push(op.focus == null ? this.code!.unfocus() : this.code!.focus(op.focus, color(op.color, C.YELLOW)));
+      if ('focus' in op) inAnims.push(op.focus == null ? this.code!.unfocus() : this.code!.focus(op.focus, color(op.color, C.YELLOW)));
       if (op.add) {
         const g = makeNode(op.add); g.key = op.add.id; this.nodes[op.add.id] = g; this.placeNode(g, op.add.at ?? [0, 0]);
-        anims.push(new FadeIn(g, { shift: op.add.shift ?? [0, -0.2] }));
+        inAnims.push(new FadeIn(g, { shift: op.add.shift ?? [0, -0.2] }));
+        fadesIn = true;
       }
-      if (op.remove) { const id = op.remove; const g = this.node(id); anims.push(new FadeOut(g, { shift: op.shift ?? [0, 0.4] })); after.push(() => delete this.nodes[id]); }
+      if (op.remove) { const id = op.remove; const g = this.node(id); outAnims.push(new FadeOut(g, { shift: op.shift ?? [0, 0.4] })); after.push(() => delete this.nodes[id]); fadesOut = true; }
       if (op.move) {
         const g = this.node(op.move.id);
         const target = this.placeNode(g.copy(), op.move.at);
-        anims.push(new Transform(g, target));
+        inAnims.push(new Transform(g, target));
       }
       if (op.style) {
         const g = this.node(op.style.id), col = color(op.style.color);
         const t = g.copy(); t.shape.setStyle({ stroke: col, fill: col });
         if (t.kind === 'slot') t.shape.setStyle({ fillOpacity: op.style.fillOpacity ?? 0.3 });
         if (t.kind === 'pointer') t.label!.setFill(col);
-        anims.push(new Transform(g, t));
+        inAnims.push(new Transform(g, t));
       }
       if (op.indicate) {
         const g = this.nodes[op.indicate] ?? this.edges[op.indicate];
         if (!g) throw new TypeError(`doc: no node or edge "${op.indicate}"`);
-        anims.push(new Indicate(g.shape, { color: color(op.color, C.YELLOW), scaleFactor: op.scale ?? 1.12 }));
+        inAnims.push(new Indicate(g.shape, { color: color(op.color, C.YELLOW), scaleFactor: op.scale ?? 1.12 }));
       }
       if (op.set) {
         for (const [k, v] of Object.entries(op.set)) {
@@ -276,19 +284,27 @@ export class DocScene extends Scene {
           const cur = this.readout?.values[k];
           if (cur) {
             const next = new Text(String(v), { fontSize: cur.fontSize, font: 'mono', color: color(op.color, C.WHITE), anchor: 'start' }).moveTo(cur, [-1, 0]);
-            anims.push(new Transform(cur, next));
+            inAnims.push(new Transform(cur, next));
           }
         }
       }
       if (op.note != null) {
-        if (this.note) anims.push(new FadeOut(this.note));
+        if (this.note) { outAnims.push(new FadeOut(this.note)); fadesOut = true; }
         if (op.note) {
           const n = new Text(op.note, { fontSize: 0.28, color: color(op.color, C.GREY) }).moveTo(op.at ?? this.doc.noteAt ?? [0, -3.4]);
-          this.note = n; anims.push(new FadeIn(n, { shift: [0, -0.2] }));
+          this.note = n; inAnims.push(new FadeIn(n, { shift: [0, -0.2] })); fadesIn = true;
         } else this.note = null;
       }
     }
-    if (anims.length) await this.play(...anims, { runTime });
+    // Sequence only when both directions are present. A removal beside a
+    // recolor (no new text) still plays together.
+    if (fadesOut && fadesIn) {
+      if (outAnims.length) await this.play(...outAnims, { runTime: Math.min(runTime, 0.35) });
+      if (inAnims.length) await this.play(...inAnims, { runTime });
+    } else {
+      const anims = [...outAnims, ...inAnims];
+      if (anims.length) await this.play(...anims, { runTime });
+    }
     for (const f of after) f();
   }
 }

@@ -161,7 +161,7 @@ export class JustBashScene extends Scene {
 
     // ---- 6. lookup ------------------------------------------------------------------
     await this.step('lookup', { caption: 'How did tr run? Each name is looked up in order: shell functions the script defined, then host commands the caller registered, then the registry of ninety-three builtins written in Elixir. Nothing is ever spawned. A miss is exit 127, like bash.' });
-    await this.play(new FadeOut(new Group(stage1, stage2, out1, out2, a1, a2, a3, stdinLbl, carried, token, hl, reduceCode)), { runTime: 0.4 });
+    await this.play(new FadeOut(new Group(stage1, stage2, out1, out2, a1, a2, a3, stdinLbl, carried, token, hl, reduceCode, cmd)), { runTime: 0.4 });
     const chain = new Group(
       box('bash.functions', TEAL, { w: 3.4 }), box('bash.commands', TEAL, { w: 3.4 }), box('Registry (93 builtins)', TEAL, { w: 3.9 }), box('exit 127: command not found', RED, { w: 4.6 }),
     ).arrange(DOWN, 0.45).moveTo([-3.2, 0.1]);
@@ -198,7 +198,7 @@ export class JustBashScene extends Scene {
       '  "/home/user"           => %{type: :directory, mode: 0o755},',
       '',
       '}}',
-    ], { fontSize: 0.22 }).moveTo([3.0, -1.0]);
+    ], { fontSize: 0.22 }).moveTo([3.4, -1.0]);
     const entrySlot = 2 * fsBox.lines[2]!.center()[1] - fsBox.lines[1]!.center()[1]; // the blank 4th line
     const bend = new Arrow(outStr.right(), [fsBox.left()[0] - 0.25, entrySlot], { stroke: GOLD, buff: 0.15 });
     await this.play(new FadeIn(stage), new FadeIn(outStr), new FadeIn(fsBox, { shift: [0.2, 0] }), { runTime: 0.6 });
