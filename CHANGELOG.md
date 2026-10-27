@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Worker accepts a JSON scene on `POST /render`, and on `POST /frame.svg`, `/text`, `/elements.json`, `/trace.json`, and `/index.json`. The request can use the shapes, animations, `SvgOptions` (`width`, `background`), and outputs the library renders. SVG responses send `x-content-type-options: nosniff` and a content security policy with no scripts. `GET /elements.json` returns a registered scene's elements.
 - Layout: `Card` sizes a box to its rows, and `route` draws a connector that meets an edge
   without crossing text or another box. `verify:motion` rejects a frame that breaks
   those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`, `clip`). `intrude` is a text
