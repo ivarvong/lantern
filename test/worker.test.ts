@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import worker from '../app/worker.ts';
+import worker, { failureResponse } from '../app/worker.ts';
 import type { SceneIndex } from '../src/index.ts';
 import { SCENES } from '../scenes/index.ts';
 
@@ -55,6 +55,23 @@ test('/index.json without a scene is the catalog', async () => {
   const body = await res.json() as { scenes: Array<{ name: string; label: string }>; help: string };
   assert.deepEqual(body.scenes.map((s) => s.name), Object.keys(SCENES));
   assert.equal(body.help, '/llms.txt');
+});
+
+test('an unexpected throw is a 500 JSON body with no exception text', () => {
+  const secret = 'scene payload should not leak';
+  const res = failureResponse(new Error(secret));
+  assert.equal(res.status, 500);
+  assert.match(res.headers.get('content-type') ?? '', /json/);
+  assert.equal(res.headers.get('cache-control'), 'no-store');
+  return res.text().then((text) => {
+    assert.equal(text.includes(secret), false);
+    assert.deepEqual(JSON.parse(text), { error: 'internal error', help: '/llms.txt' });
+  });
+});
+
+test('a thrown response is returned unchanged', () => {
+  const sent = new Response('kept', { status: 404 });
+  assert.equal(failureResponse(sent), sent);
 });
 
 test('errors are JSON with what to try instead', async () => {

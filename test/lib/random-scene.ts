@@ -27,8 +27,11 @@ export function rng(seed: number): Rng {
   return r;
 }
 
-const COLORS = ['#ffffff', '#58c4dd', '#5cd0b3', '#83c167', '#f0ac5f', '#fc6255', '#888888', '#ffff00', '#9a72ac'];
-const WORDS = ['a', 'hello', 'Worker handler', 'x = 1', '→ 42', 'Ω', 'pyex #29'];
+// A trailing XML-illegal character rides on a real hex colour so style blending
+// still parses, and the serializer has to drop it. Names that are also
+// prototype keys show up as text.
+const COLORS = ['#ffffff', '#58c4dd', '#5cd0b3', '#83c167', '#f0ac5f', '#fc6255', '#888888', '#ffff00', '#9a72ac', '#ffffff\u0000', '#58c4dd\u0001', '#000000\u0008', '#fc6255\u000b', '#ffff00\u001f'];
+const WORDS = ['a', 'hello', 'Worker handler', 'x = 1', '→ 42', 'Ω', 'pyex #29', 'constructor', 'toString', '__proto__'];
 
 function randomStyle(r: Rng): Style {
   return { fill: r.pick(COLORS), fillOpacity: r(0, 1), stroke: r.bool(0.8) ? r.pick(COLORS) : 'none', strokeWidth: r(0.01, 0.1), opacity: r.bool(0.9) ? 1 : r(0, 1) };

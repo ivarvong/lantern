@@ -1,7 +1,7 @@
 // The homepage guide (static in index.html): points its example URLs at the API
 // origin, keeps them on the player's current scene and step (the player fires
 // "lantern:step"), lists the scenes, and adds copy buttons.
-import { SCENES } from '../scenes/index.ts';
+import { sceneByName } from '../scenes/index.ts';
 
 const PROD = 'https://lantern.ivar.workers.dev';
 // Pages served by the Worker call their own origin; file:// pages, and hosts that set
@@ -58,11 +58,13 @@ export function mountGuide(root: HTMLElement | null, names: string[]): void {
       return a;
     };
     for (const name of names) {
+      const entry = sceneByName(name);
+      if (!entry) continue;
       const q = `?scene=${encodeURIComponent(name)}`;
       const tr = document.createElement('tr');
       const nameCell = document.createElement('td'), what = document.createElement('td'), api = document.createElement('td');
       const code = document.createElement('code'); code.textContent = name; nameCell.append(code);
-      what.textContent = SCENES[name]!.label;
+      what.textContent = entry.label;
       api.append(link(`/index.json${q}`, 'steps'), link(`/trace.json${q}`, 'trace'), link(`/text${q}`, 'text'), link(`/frame.svg${q}`, 'svg'));
       tr.append(nameCell, what, api);
       body.append(tr);

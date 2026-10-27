@@ -2,13 +2,13 @@
 //   npm run shot -- <scene> [--times=8] [--out=out/shots/<scene>.png]
 import { mkdirSync } from 'node:fs';
 import { renderAt, SnapshotSink, traceScene } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { SCENES, sceneByName } from '../scenes/index.ts';
 import { launch } from './lib/browser.ts';
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string | number): string => args.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? String(d);
 const name = args.find((a) => !a.startsWith('--'));
-const entry = name == null ? undefined : SCENES[name];
+const entry = name == null ? undefined : sceneByName(name);
 if (!entry) { console.error(`usage: npm run shot -- <scene> [--times=N]\nscenes: ${Object.keys(SCENES).join(', ')}`); process.exit(2); }
 const { Scene } = entry;
 const trace = await traceScene(Scene);

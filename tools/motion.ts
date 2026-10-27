@@ -2,12 +2,14 @@
 //   npm run verify:motion -- [scene ...] [--all-events]
 import { MotionSink, analyzeMotion, summarizeMotion } from '../src/index.ts';
 import { SCENES } from '../scenes/index.ts';
+import { requireScene } from './scene.ts';
 const args = process.argv.slice(2);
 const names = args.filter((a) => !a.startsWith('--'));
 let total = 0;
 for (const name of names.length ? names : Object.keys(SCENES)) {
   const sink = new MotionSink();
-  await new SCENES[name]!.Scene(sink).run();
+  const { Scene } = requireScene(name);
+  await new Scene(sink).run();
   const events = analyzeMotion(sink);
   total += events.length;
   const byKind = events.reduce<Record<string, number>>((m, e) => ((m[e.kind] = (m[e.kind] ?? 0) + 1), m), {});

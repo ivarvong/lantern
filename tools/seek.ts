@@ -1,8 +1,8 @@
 // Cold and warm cost of the operations the player and Worker do on a deep link.
 import { traceScene, renderAt, SnapshotSink, NullSink } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { requireScene } from './scene.ts';
 const name = process.argv[2] ?? 'pyex-limits';
-const { Scene } = SCENES[name]!;
+const { Scene } = requireScene(name);
 const time = async (f: () => Promise<unknown>): Promise<number> => { const t0 = performance.now(); await f(); return performance.now() - t0; };
 const cold = await time(() => traceScene(Scene));
 const trace = await traceScene(Scene);

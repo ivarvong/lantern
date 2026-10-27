@@ -3,12 +3,12 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { StringSink, perf } from '../src/index.ts';
 import { NullSink } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { requireScene } from './scene.ts';
 
 const args = process.argv.slice(2);
 const name = args.find((a) => !a.startsWith('--')) ?? 'pyex-limits';
 const sinkKind = (args.find((a) => a.startsWith('--sink=')) ?? '--sink=string').slice(7);
-const { Scene } = SCENES[name]!;
+const { Scene } = requireScene(name);
 
 // Warm the JIT and the font cache so the measured run is steady state
 await new Scene(new NullSink()).run();

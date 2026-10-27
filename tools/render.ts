@@ -2,13 +2,14 @@
 //   npm run render -- [scene ...]   writes out/frames/<scene>/f0000.svg ...
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { StringSink } from '../src/index.ts';
+import { requireScene } from './scene.ts';
 import { SCENES } from '../scenes/index.ts';
 
 const names = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(SCENES);
 const fps = 30;
 
 for (const name of names) {
-  const { Scene } = SCENES[name] ?? (() => { throw new Error(`unknown scene ${name}`); })();
+  const { Scene } = requireScene(name);
   const outDir = new URL(`../out/frames/${name}/`, import.meta.url).pathname;
   mkdirSync(outDir, { recursive: true });
   const sink = new StringSink({ width: 1280 });

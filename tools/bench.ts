@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { Scene, StringSink, SnapshotSink, renderElements, traceScene, renderAt, indexScene, loadFonts } from '../src/index.ts';
 import type { SceneClass } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { SCENES, sceneByName } from '../scenes/index.ts';
 
 Scene.captionWpm = Infinity; // measure animation, not caption holds
 const args = process.argv.slice(2);
@@ -86,7 +86,7 @@ if (args.includes('--update') || !baseline) {
   const flagged = Object.entries(results).filter(([name, r]) => Object.keys(r).some((k) => k !== 'frames' && regressed(k, r[k]!, baseline[name]?.[k] ?? Infinity)));
   const confirmed: string[] = [];
   for (const [name] of flagged) {
-    const again = await measure(name, SCENES[name]!.Scene);
+    const again = await measure(name, sceneByName(name)!.Scene);
     // Flagged means the baseline has this scene and metric (a missing one compares to Infinity)
     const base = baseline[name]!, now = results[name]!;
     for (const k of Object.keys(again)) if (k !== 'frames' && regressed(k, now[k]!, base[k]!) && regressed(k, again[k]!, base[k]!)) {

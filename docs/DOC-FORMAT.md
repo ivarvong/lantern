@@ -48,7 +48,7 @@ Example: [scenes/ring-buffer.doc.json](../scenes/ring-buffer.doc.json), generate
 | `text` | none | sans, `fontSize`, `weight` |
 
 Colors are palette names (`blue teal green gold red grey yellow white purple orange`)
-or any CSS hex.
+or `#rgb` / `#rrggbb`. Other strings are an error.
 
 `at` is `[x, y]` (frame is 16 × 9, origin at center, y up), a node id (that node's
 center), or `{ "of": id, "dir": [dx, dy], "buff": b }`: beside that node, like `nextTo`.

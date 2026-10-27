@@ -3,11 +3,11 @@
 // what the player shows.
 //   npm run transcript -- <scene> [--vtt] > out/<scene>.md
 import { traceScene, Scene } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { SCENES, sceneByName } from '../scenes/index.ts';
 
 const args = process.argv.slice(2);
 const name = args.find((a) => !a.startsWith('--'));
-const entry = name == null ? undefined : SCENES[name];
+const entry = name == null ? undefined : sceneByName(name);
 if (!entry) { console.error(`usage: npm run transcript -- <scene> [--vtt]\nscenes: ${Object.keys(SCENES).join(', ')}`); process.exit(2); }
 const { steps } = await traceScene(entry.Scene);
 const cues = steps.filter((s) => s.meta?.caption).map((s) => ({ name: s.step, t0: s.t0, t1: s.t1, text: String(s.meta.caption) }));

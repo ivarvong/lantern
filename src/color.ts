@@ -2,6 +2,19 @@
 
 type RGB = [r: number, g: number, b: number];
 
+const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+/**
+ * `#rgb` or `#rrggbb`, canonicalized to lowercase `#rrggbb`.
+ * Anything else, including an object whose toString looks like a colour, is null.
+ */
+export function canonicalHex(value: unknown): string | null {
+  if (typeof value !== 'string' || !HEX.test(value)) return null;
+  const h = value.slice(1);
+  const full = h.length === 3 ? h[0]! + h[0]! + h[1]! + h[1]! + h[2]! + h[2]! : h;
+  return '#' + full.toLowerCase();
+}
+
 const cache = new Map<string, RGB>();
 
 export function parseColor(hex: string | null | undefined): RGB | null {

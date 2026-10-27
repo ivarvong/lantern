@@ -2,9 +2,9 @@
 // SVG that comes back parses as a closed set of elements and attributes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import worker from '../app/worker.ts';
 import { rng } from './lib/random-scene.ts';
+import { assertSvg as checkSvg } from './lib/svg-oracle.ts';
 
 const ORIGIN = 'https://lantern.example';
 const env = { ASSETS: { fetch: async () => new Response('page', { headers: { 'content-type': 'text/html' } }) } };
@@ -24,48 +24,8 @@ function post(path: string, body: unknown, headers: Record<string, string> = {})
   return call(path, { method: 'POST', body: payload, headers: { 'content-type': 'application/json', ...headers } });
 }
 
-const ORACLE = `
-import json, sys
-import xml.etree.ElementTree as ET
-req = json.load(sys.stdin)
-raw = req["svg"]
-if "<!" in raw or "<?" in raw or "<script" in raw.lower() or "onload" in raw.lower():
-    sys.exit("svg contains a forbidden construct")
-NS = "{http://www.w3.org/2000/svg}"
-root = ET.fromstring(raw)
-tags = {NS + "svg", NS + "rect", NS + "path"}
-svg_attrs = {"xmlns", "width", "height", "viewBox"}
-rect_attrs = {"x", "y", "width", "height", "fill"}
-path_attrs = {"d", "fill", "fill-opacity", "stroke", "stroke-width", "stroke-opacity", "stroke-linejoin", "stroke-linecap", "opacity", "stroke-dasharray", "stroke-dashoffset", "transform"}
-color = __import__("re").compile(r"^#[0-9a-f]{6}$|^none$")
-rects = []
-def walk(el):
-    if el.tag not in tags:
-        sys.exit("element " + el.tag)
-    allowed = svg_attrs if el.tag == NS + "svg" else rect_attrs if el.tag == NS + "rect" else path_attrs
-    for name in el.attrib:
-        if name.lower().startswith("on") or name not in allowed:
-            sys.exit("attribute " + name)
-    if el.tag == NS + "rect":
-        rects.append(el)
-        if el.attrib.get("fill") != req["background"]:
-            sys.exit("background " + el.attrib.get("fill", ""))
-    if el.tag == NS + "path":
-        for key in ("fill", "stroke"):
-            if key in el.attrib and not color.match(el.attrib[key]):
-                sys.exit("paint " + el.attrib[key])
-    for child in el:
-        walk(child)
-walk(root)
-if root.attrib.get("width") != str(req["width"]):
-    sys.exit("width " + root.attrib.get("width", ""))
-if len(rects) != 1:
-    sys.exit("rect count " + str(len(rects)))
-`;
-
 function assertSvg(svg: string, background: string, width: number): void {
-  const run = spawnSync('python3', ['-c', ORACLE], { input: JSON.stringify({ svg, background, width }), encoding: 'utf8' });
-  assert.equal(run.status, 0, run.stderr || run.stdout || 'xml oracle failed');
+  checkSvg(svg, { width, background, paints: 'hex' });
 }
 
 async function assertRejected(res: Promise<Response> | Response, status: number): Promise<string> {

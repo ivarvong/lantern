@@ -129,6 +129,7 @@ JSON bodies, always with "error" and "help": "/llms.txt".
 - 400 invalid scene:           { "error": "invalid scene", "errors": [{ "path", "message" }] }
 - 405 method:                  { "error": "method not allowed" }
 - 413 body too large:          { "error": "body too large" }
+- 500 unexpected:               { "error": "internal error" }
 
 ## Scenes
 
@@ -141,7 +142,7 @@ marks steps, and this.state is what traces record. A scene can also be data: a J
 of nodes, edges, code and step ops, played by sceneFromDoc(doc) (docs/DOC-FORMAT.md).
 Register it in scenes/index.ts, then:
 
-  npm run dev                       live player at http://localhost:5173/?scene=NAME
+  npm run dev                       live player at http://127.0.0.1:5173/?scene=NAME
   npm run see -- NAME STEP          a frame as text, plus the step's state diff
   npm run shot -- NAME              contact sheet PNG: the end of every step
   npm run verify:motion -- NAME     teleports, pops, cuts, flicker
@@ -157,6 +158,12 @@ async function firstExample(): Promise<[scene: string, step: string]> {
 }
 
 const text = (body: string): Response => new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', vary: 'Accept', ...CORS } });
+
+/** A thrown Response is the request's reply. Anything else is a 500 with no exception text. */
+export function failureResponse(e: unknown): Response {
+  if (e instanceof Response) return e;
+  return jsonResponse({ error: 'internal error', help: '/llms.txt' }, 500, 'nostore');
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -184,8 +191,7 @@ export default {
       page.headers.set('vary', 'Accept');
       return page;
     } catch (e) {
-      if (e instanceof Response) return e;
-      throw e;
+      return failureResponse(e);
     }
   },
 };

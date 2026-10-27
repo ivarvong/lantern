@@ -37,7 +37,7 @@ export class StateReadout extends Group {
 
   constructor(entries: ReadonlyArray<readonly [key: string, value: unknown]>, { fontSize = 0.3, at = [0, 0], gap = 0.5 }: { fontSize?: number; at?: Vec; gap?: number } = {}) {
     super();
-    this.values = {};
+    this.values = Object.create(null);
     entries.forEach(([k, v], i) => {
       const key = new Text(k, { fontSize, font: 'mono', color: GREY, anchor: 'end' });
       const val = new Text(String(v), { fontSize, font: 'mono', color: WHITE, anchor: 'start' });

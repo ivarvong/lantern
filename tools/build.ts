@@ -6,9 +6,33 @@
 // esbuild is a build-time tool only; the runtime has no dependencies.
 import { build } from 'esbuild';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
 
 const root = new URL('../', import.meta.url).pathname;
-const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7) ?? null;
+const onlyArg = process.argv.find((a) => a.startsWith('--only='))?.slice(7) ?? null;
+const SCENE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+/** Pages for --only, both under out/. A name that is not a scene token is refused. */
+function onlyPages(name: string): { html: string; artifact: string } {
+  if (!SCENE_NAME.test(name)) {
+    console.error('build --only expects a scene name of letters, digits, "_" and "-"');
+    process.exit(1);
+  }
+  const dir = resolve(root, 'out');
+  const html = resolve(dir, `${name}.html`);
+  const artifact = resolve(dir, `${name}.artifact.html`);
+  for (const file of [html, artifact]) {
+    const rel = relative(dir, file);
+    if (rel.startsWith('..') || rel.split(sep).includes('..')) {
+      console.error('build output must stay inside out/');
+      process.exit(1);
+    }
+  }
+  return { html, artifact };
+}
+
+const only = onlyArg == null ? null : onlyArg;
+const pages = only == null ? null : onlyPages(only);
 const t0 = performance.now();
 const result = await build({
   entryPoints: [root + 'app/main.ts'],
@@ -30,9 +54,9 @@ const artifact = '<title>lantern: animated, steppable code explainers</title>\n<
   html.slice(html.indexOf('<link rel="preconnect"'), html.indexOf('</head>')) +
   html.slice(html.indexOf('<main>'), html.indexOf('</body>'));
 mkdirSync(root + 'out/site', { recursive: true });
-if (only) {
-  writeFileSync(root + `out/${only}.html`, html);
-  writeFileSync(root + `out/${only}.artifact.html`, artifact);
+if (pages) {
+  writeFileSync(pages.html, html);
+  writeFileSync(pages.artifact, artifact);
   console.log(`built in ${(performance.now() - t0).toFixed(0)} ms: out/${only}.html ${(html.length / 1024).toFixed(0)} KB`);
 } else {
   writeFileSync(root + 'out/site/index.html', html);

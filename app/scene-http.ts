@@ -8,7 +8,7 @@
 
 import { SnapshotSink, StringSink, indexScene, renderAt, renderElements, renderText, stepTime, traceScene } from '../src/index.ts';
 import type { SceneClass } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { SCENES, sceneByName } from '../scenes/index.ts';
 import type { SceneEntry } from '../scenes/index.ts';
 import { SceneRejected, compileScene } from './scene-compile.ts';
 import { fail as parseFail, ok } from './result.ts';
@@ -98,10 +98,7 @@ export function shortcutFormat(route: string): 'svg' | 'text' | 'elements' | 'tr
 
 export function lookupScene(name: string | null): SceneEntry {
   if (name != null && name.length > 64) fail(400, { error: 'scene name is too long' });
-  if (name == null || name.length === 0 || !Object.hasOwn(SCENES, name)) {
-    fail(404, { error: 'unknown or missing scene', scenes: Object.keys(SCENES) });
-  }
-  const entry = SCENES[name];
+  const entry = name == null || name.length === 0 ? undefined : sceneByName(name);
   if (!entry) fail(404, { error: 'unknown or missing scene', scenes: Object.keys(SCENES) });
   return entry;
 }

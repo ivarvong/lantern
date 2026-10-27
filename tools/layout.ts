@@ -4,6 +4,7 @@
 //   npm run verify:layout -- [scene ...] [--html=out/demo.html]
 import { launch } from './lib/browser.ts';
 import { SCENES } from '../scenes/index.ts';
+import { requireScene } from './scene.ts';
 import { traceScene } from '../src/index.ts';
 
 const args = process.argv.slice(2);
@@ -14,7 +15,7 @@ const browser = await launch();
 const problems: string[] = [];
 let checked = 0;
 for (const name of names.length ? names : Object.keys(SCENES)) {
-  const { steps } = await traceScene(SCENES[name]!.Scene);
+  const { steps } = await traceScene(requireScene(name).Scene);
   for (const [w, h, label] of VIEWPORTS) {
     const page = await browser.newPage({ viewport: { width: w, height: h }, deviceScaleFactor: 1 });
     for (const s of steps) {
