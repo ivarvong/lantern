@@ -35,9 +35,12 @@ export function loadFonts(): Promise<Record<FontName, Shaper>> {
 /** The shaper for 'sans' or 'mono'. Throws if fonts haven't been loaded. */
 export function shaperFor(font: FontName): Shaper {
   if (!shapers) throw new Error('Fonts are not loaded: await loadFonts() first (Scene.run() does this for scenes)');
-  const s = shapers[font] as Shaper | undefined;
-  if (!s) throw new Error(`Unknown font "${font}": use 'sans' or 'mono'`);
-  return s;
+  // === against the two faces: a prototype key, or an object whose toString is 'sans', is unknown
+  switch (font) {
+    case 'sans': return shapers.sans;
+    case 'mono': return shapers.mono;
+    default: throw new Error("Unknown font: use 'sans' or 'mono'");
+  }
 }
 
 async function buildShapers(): Promise<Record<FontName, Shaper>> {

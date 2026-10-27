@@ -5,7 +5,7 @@
 // fires "lantern:step" ({ scene, step }) on document, for the guide.
 import { DomSink, SeekSink, stepTime, traceScene, perf } from '../src/index.ts';
 import type { Scene, SceneIndex, Sink, Step, StepMeta, Trace } from '../src/index.ts';
-import { SCENES as ALL_SCENES } from '../scenes/index.ts';
+import { SCENES as ALL_SCENES, sceneByName } from '../scenes/index.ts';
 import type { SceneEntry } from '../scenes/index.ts';
 
 /** esbuild's define (tools/build.ts): the one scene of a --only build, or null; undefined in dev. */
@@ -13,7 +13,7 @@ declare const __ONLY__: string | null | undefined;
 
 // A build with --only=<scene> (tools/build.ts) ships one scene as its own page
 const ONLY = typeof __ONLY__ !== 'undefined' ? __ONLY__ : null;
-const ONLY_ENTRY = ONLY ? ALL_SCENES[ONLY] : undefined;
+const ONLY_ENTRY = typeof ONLY === 'string' ? sceneByName(ONLY) : undefined;
 const SCENES: Record<string, SceneEntry> = ONLY && ONLY_ENTRY ? { [ONLY]: ONLY_ENTRY } : ALL_SCENES;
 export const sceneNames = () => Object.keys(SCENES);
 
@@ -24,7 +24,7 @@ function readLink(): { scene: string | null; step: string | null; t: number | nu
   let scene: string | null | undefined = q.get('scene'), step: string | null | undefined = q.get('step');
   const t = q.get('t');
   if (!scene && location.hash.length > 1) [scene, step] = location.hash.slice(1).split('.');
-  return { scene: String(scene) in SCENES ? scene! : null, step: step ?? null, t: t == null ? null : Number(t) };
+  return { scene: typeof scene === 'string' && Object.hasOwn(SCENES, scene) ? scene : null, step: step ?? null, t: t == null ? null : Number(t) };
 }
 
 function linkFor(scene: string, step: string | null): URL {
@@ -116,7 +116,7 @@ export function mountPlayer(root: HTMLElement): void {
   let paused = false, pauseAtSteps = false;
   let resume: (() => void) | null = null;
   let activeStep: string | null = null, lastTime = 0;
-  const cache: Record<string, { ix: SceneIndex; tr: Trace }> = {};
+  const cache: Record<string, { ix: SceneIndex; tr: Trace }> = Object.create(null);
 
   if (ONLY) root.classList.add('single');
   for (const [key, { label }] of Object.entries(SCENES)) {
@@ -134,8 +134,10 @@ export function mountPlayer(root: HTMLElement): void {
   }
 
   async function load(key: string): Promise<{ ix: SceneIndex; tr: Trace }> {
-    if (!cache[key]) {
-      const { Scene } = SCENES[key]!;
+    const entry = sceneByName(key);
+    if (!entry || !Object.hasOwn(SCENES, key)) throw new Error('Unknown scene');
+    if (!Object.hasOwn(cache, key)) {
+      const { Scene } = entry;
       // One run gives both: the trace's step records carry everything the index has
       const end = perf.begin('load.trace');
       const tr = await traceScene(Scene);
@@ -144,7 +146,7 @@ export function mountPlayer(root: HTMLElement): void {
         steps: tr.steps.map((s) => ({ name: s.step.split('/').pop()!, path: s.step, t0: s.t0, t1: s.t1 ?? null, frame0: s.frame0, frame1: s.frame1 ?? null, meta: s.meta })) };
       cache[key] = { ix, tr };
     }
-    return cache[key];
+    return cache[key]!;
   }
 
   // ---- rendering the chrome --------------------------------------------------------
@@ -258,7 +260,9 @@ export function mountPlayer(root: HTMLElement): void {
         if (pauseAtSteps && !firstLive && Math.abs(scene.time - startAt) > 1e-6) setPaused(true);
       },
     };
-    const { Scene } = SCENES[current]!;
+    const loaded = sceneByName(current);
+    if (!loaded || !Object.hasOwn(SCENES, current)) return;
+    const { Scene } = loaded;
     const scene = new Scene(sink, { fps: 30, skipUntil: startAt });
     stageInner.classList.toggle('portrait', scene.frame.h > scene.frame.w);
     try { await scene.run(); } catch (e) { if (!(e instanceof Abort)) throw e; return; }

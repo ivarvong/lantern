@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The Worker accepts a JSON scene on `POST /render`, and on `POST /frame.svg`, `/text`, `/elements.json`, `/trace.json`, and `/index.json`. The request can use the shapes, animations, `SvgOptions` (`width`, `background`), and outputs the library renders. SVG responses send `x-content-type-options: nosniff` and a content security policy with no scripts. `GET /elements.json` returns a registered scene's elements.
+- SVG serialization accepts an integer width from 1 to 4096 and a `#rgb` or `#rrggbb` background, and drops characters XML 1.0 cannot represent. Scene, font, and document-colour lookups use own properties. The dev server listens on 127.0.0.1 and does not serve dotfiles. `build --only` writes only under `out/`. `vendor/glyph.js` is pinned by sha256. An unexpected Worker error is a 500 JSON body.
 - Layout: `Card` sizes a box to its rows, and `route` draws a connector that meets an edge
   without crossing text or another box. `verify:motion` rejects a frame that breaks
   those rules (`pierce`, `fill`, `overlap`, `margin`, `intrude`, `clip`). `intrude` is a text

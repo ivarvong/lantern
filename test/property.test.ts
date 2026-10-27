@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { Scene, StringSink, SnapshotSink, Text, Transform, renderAt, traceScene, indexScene, renderText, loadFonts, VMobject } from '../src/index.ts';
 import type { Box, Mobject, Sink, StyleRecord } from '../src/index.ts';
 import { rng, makeScene, place, randomShape } from './lib/random-scene.ts';
+import { assertSvgs } from './lib/svg-oracle.ts';
 
 await loadFonts();
 const SEEDS = process.env.SEED ? [Number(process.env.SEED)] : Array.from({ length: process.env.FULL ? 400 : 40 }, (_, i) => i + 1);
@@ -42,6 +43,8 @@ test('random scenes: deterministic, finite, cache-exact, box-exact, seek-exact',
       assert.ok(a.frames.length > 1, ctx);
       assert.deepEqual(a.frames, b.frames, `${ctx}: not deterministic`);
       for (const f of a.frames) assert.ok(!/NaN|Infinity|undefined/.test(f), `${ctx}: non-finite output`);
+      // Strict XML parse, tag and attribute allowlist, background and width round-trip
+      assertSvgs(a.frames, { width: 1280, background: '#1a1a1a' });
       // seeking to 3 times lands on the exact frame
       const ix = await indexScene(S, { fps: 20 });
       const r = rng(seed * 7919);

@@ -15,7 +15,13 @@ import { PlyViewerScene } from './ply-viewer.ts';
 /** A registered scene: the player's label, the class, and the doc for doc scenes. */
 export interface SceneEntry { label: string; Scene: SceneClass; doc?: Doc }
 
-export const SCENES: Record<string, SceneEntry> = {
+/** An own entry of {@link SCENES}. Inherited names (`toString`, `constructor`, `__proto__`) are missing. */
+export function sceneByName(name: string): SceneEntry | undefined {
+  if (typeof name !== 'string' || !Object.hasOwn(SCENES, name)) return undefined;
+  return SCENES[name];
+}
+
+export const SCENES: Record<string, SceneEntry> = Object.assign(Object.create(null), {
   'lantern': { label: 'Lantern, drawn by Lantern', Scene: LanternScene },
   'exgit': { label: 'exgit: git from the inside', Scene: ExgitScene },
   'ply-viewer': { label: 'ply /view: a public git repo', Scene: PlyViewerScene },
@@ -26,4 +32,4 @@ export const SCENES: Record<string, SceneEntry> = {
   'token-bucket': { label: 'Token bucket rate limiter', Scene: TokenBucketScene },
   'glyph-text': { label: 'Real text: outlines, Write, morph', Scene: GlyphScene },
   'ring-buffer': { label: 'Ring buffer (JSON doc)', Scene: sceneFromDoc(ringBufferDoc), doc: ringBufferDoc },
-};
+});

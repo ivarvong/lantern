@@ -14,6 +14,7 @@ import { FadeIn, FadeOut, Create, Write, Transform, Indicate, LaggedStart } from
 import type { Animation } from './animation.ts';
 import type { AnimateBuilderBase, Mobject } from './mobject.ts';
 import * as C from './color.ts';
+import { canonicalHex } from './color.ts';
 import { sub, normalize, mul, add, UP, DOWN } from './vec.ts';
 import type { Vec } from './vec.ts';
 import { CodePanel, StateReadout } from './panels.ts';
@@ -82,8 +83,17 @@ export interface Doc {
 
 // ---- the compiler -----------------------------------------------------------
 
-const COLORS: Record<string, string> = { blue: C.BLUE, teal: C.TEAL, green: C.GREEN, gold: C.GOLD, red: C.RED, grey: C.GREY, yellow: C.YELLOW, white: C.WHITE, purple: C.PURPLE, orange: C.ORANGE };
-const color = (c: string | undefined, d: string = C.GREY): string => (c == null ? d : COLORS[c] ?? c);
+const COLORS: Record<string, string> = Object.assign(Object.create(null), {
+  blue: C.BLUE, teal: C.TEAL, green: C.GREEN, gold: C.GOLD, red: C.RED, grey: C.GREY, yellow: C.YELLOW, white: C.WHITE, purple: C.PURPLE, orange: C.ORANGE,
+});
+/** A palette name or `#rgb` / `#rrggbb`. Anything else, including an inherited key, is an error. */
+function color(c: string | undefined, d: string = C.GREY): string {
+  if (c == null) return d;
+  if (Object.hasOwn(COLORS, c)) return COLORS[c]!;
+  const hex = canonicalHex(c);
+  if (hex != null) return hex;
+  throw new Error('Unknown colour');
+}
 
 /** A node: a shape and/or a label, plus the doc kind that decides its layout. */
 class DocNode extends Labeled<Mobject, Text> {
@@ -154,13 +164,15 @@ export class DocScene extends Scene {
     const doc = opts.doc ?? (this.constructor as typeof DocScene).doc;
     if (!doc) throw new Error('DocScene needs a doc (opts.doc or static doc)');
     this.doc = doc;
-    this.nodes = {}; this.edges = {}; this.state = { ...(this.doc.state ?? {}) };
+    this.nodes = Object.create(null);
+    this.edges = Object.create(null);
+    this.state = Object.assign(Object.create(null), this.doc.state ?? {});
     this.note = null;
   }
 
   /** A node by id; ids come from the doc, so a missing one is an authoring error. */
   private node(id: string): DocNode {
-    const g = this.nodes[id];
+    const g = Object.hasOwn(this.nodes, id) ? this.nodes[id] : undefined;
     if (!g) throw new TypeError(`doc: no node "${id}"`);
     return g;
   }
@@ -274,7 +286,8 @@ export class DocScene extends Scene {
         inAnims.push(new Transform(g, t));
       }
       if (op.indicate) {
-        const g = this.nodes[op.indicate] ?? this.edges[op.indicate];
+        const g = (Object.hasOwn(this.nodes, op.indicate) ? this.nodes[op.indicate] : undefined)
+          ?? (Object.hasOwn(this.edges, op.indicate) ? this.edges[op.indicate] : undefined);
         if (!g) throw new TypeError(`doc: no node or edge "${op.indicate}"`);
         inAnims.push(new Indicate(g.shape, { color: color(op.color, C.YELLOW), scaleFactor: op.scale ?? 1.12 }));
       }

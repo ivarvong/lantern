@@ -35,7 +35,9 @@ function exec(bash: Bash, stages: Stage[], redirect: string | null): [{ stdout: 
   let steps = bash.steps;
   const reduce = stages.reduce<{ stdout: string; name?: string }>((prev, [name, ...args]) => {
     steps++; // Limit.step! once per builtin dispatched
-    return { stdout: BUILTINS[name](args, prev.stdout, bash.fs), name };
+    const builtin = Object.hasOwn(BUILTINS, name) ? BUILTINS[name] : undefined;
+    if (!builtin) throw new Error('Unknown builtin');
+    return { stdout: builtin(args, prev.stdout, bash.fs), name };
   }, { stdout: '' });
   const fs = { ...bash.fs };
   let stdout = reduce.stdout;

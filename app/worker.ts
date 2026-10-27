@@ -5,8 +5,12 @@
 //   GET /llms.txt                          plain-text guide: endpoints, params, scenes and steps
 //   GET /index.json                        scene catalog (no scene) | ?scene=x steps and duration
 //   GET /trace.json?scene=x                structured trace (state at every step)
-//   GET /frame.svg?scene=x&step=s | &t=1.5 one frame as image/svg+xml (&w= width in px)
+//   GET /frame.svg?scene=x&step=s | &t=1.5 one frame as image/svg+xml (&w= width, &background=)
 //   GET /text?scene=x&step=s   | &t=1.5    the same frame as monospace text
+//   GET /elements.json?scene=x             the same frame as JSON elements
+//   POST /render                           a JSON scene, any output the library can produce
+//   POST /frame.svg | /text | /elements.json | /trace.json | /index.json
+//                                          the same scene, with the route choosing the output
 //
 // The library is runtime-agnostic; this file is the only Workers-specific code.
 // Seeking re-runs the scene to the requested time (~10ms), so nothing is
@@ -16,34 +20,16 @@
 // Typed against the standard fetch API (lib.dom), not @cloudflare/workers-types:
 // this file uses nothing Workers-specific beyond the ASSETS binding, and the
 // workers-types globals conflict with lib.dom, which the library needs for DomSink.
-import { SnapshotSink, indexScene, stepTime, renderAt, traceScene, renderText } from '../src/index.ts';
-import type { SceneClass } from '../src/index.ts';
+import { indexScene } from '../src/index.ts';
 import { SCENES } from '../scenes/index.ts';
+import { CORS, handleGet, handlePost, isApiRoute, jsonResponse, lookupScene, methodNotAllowedResponse, preflight } from './scene-http.ts';
 
 /** The static-assets binding (wrangler.toml [assets]); absent in tests that don't need it. */
 export interface Env {
   ASSETS?: { fetch(request: Request): Promise<Response> };
 }
 
-const CORS = { 'access-control-allow-origin': '*' };
-const json = (o: unknown, status = 200): Response => Response.json(o, { status, headers: CORS });
-/** End the request with a JSON error: the Response is thrown and returned by fetch(). */
-function fail(status: number, o: Record<string, unknown>): never { throw json({ ...o, help: '/llms.txt' }, status); }
 const sceneList = () => Object.entries(SCENES).map(([name, { label }]) => ({ name, label }));
-
-async function resolveTime(Scene: SceneClass, url: URL): Promise<number> {
-  if (url.searchParams.has('t')) {
-    const t = Number(url.searchParams.get('t'));
-    if (Number.isNaN(t)) fail(400, { error: 't must be a number of seconds' });
-    return t;
-  }
-  const step = url.searchParams.get('step');
-  if (!step) return Infinity; // final frame
-  const ix = await indexScene(Scene);
-  const t = stepTime(ix, step);
-  if (t == null) fail(404, { error: `unknown step ${step}`, steps: ix.steps.map((s) => s.name) });
-  return t;
-}
 
 // Step names come from running every scene once (~150 ms), so the guide is built
 // on first request and kept for the isolate's lifetime; scenes are deterministic.
@@ -66,23 +52,63 @@ text/html (curl, agents) gets this text at / ; it is also always at /llms.txt.
 
 ## Endpoints
 
-All GET, no auth, CORS open (access-control-allow-origin: *).
+No auth. Responses send access-control-allow-origin: * because the API sets no
+cookies and returns either a public demo or the caller's own render. A browser
+may POST from another origin; preflight allows content-type and accept.
+SVG responses also send x-content-type-options: nosniff and a content-security-policy
+that allows no scripts. POST responses are not cached.
 
-- /index.json                    scene catalog: { scenes: [{ name, label }], help }
-- /index.json?scene=NAME         { fps, duration, frames, steps: [{ name, path, t0, t1, frame0, frame1, meta }] }
-- /trace.json?scene=NAME         { fps, duration, frames, steps: [{ step, t0, t1, meta, before, after, ... }] }
+- GET /index.json                scene catalog: { scenes: [{ name, label }], help }
+- GET /index.json?scene=NAME     { fps, duration, frames, steps: [{ name, path, t0, t1, frame0, frame1, meta }] }
+- GET /trace.json?scene=NAME     { fps, duration, frames, steps: [{ step, t0, t1, meta, before, after, ... }] }
                                  before/after: the scene's state at each step boundary
-- /frame.svg?scene=NAME[&step=STEP | &t=SECONDS][&w=PX]
-                                 one frame as image/svg+xml; w = width in px (default 1280)
-- /text?scene=NAME[&step=STEP | &t=SECONDS]
+- GET /frame.svg?scene=NAME[&step=STEP | &t=SECONDS][&w=PX][&background=COLOR]
+                                 one frame as image/svg+xml
+                                 w = width in px, an integer from 32 to 1280 (default 1280)
+                                 background = a palette name or #rgb/#rrggbb (default #1a1a1a)
+- GET /text?scene=NAME[&step=STEP | &t=SECONDS]
                                  the same frame as monospace text (text/plain)
-- /?scene=NAME&step=STEP         the player, deep-linked (open in a browser; ?t=SECONDS also works)
+- GET /elements.json?scene=NAME[&step=STEP | &t=SECONDS]
+                                 the same frame as JSON element records
+- GET /?scene=NAME&step=STEP     the player, deep-linked (open in a browser; ?t=SECONDS also works)
 
-Params:
+Params for a registered scene:
 - scene  required except on /index.json; one of the names below
 - step   a step name from /index.json; the frame at the moment that step begins
 - t      seconds from the start; wins over step
 - (none) neither step nor t: the final frame
+
+## A scene of your own
+
+POST a scene document. POST /render takes { "scene", "output" }. POST to
+/frame.svg, /text, /elements.json, /trace.json, or /index.json takes the scene
+itself, and the route picks the output (query: step, t, w, background, as above).
+
+output.format is svg, frames, text, elements, trace, or index.
+svg and frames take width (integer 32..1280) and background (palette name or hex).
+svg, text, and elements take select: { "kind": "end" }, { "kind": "time", "t": 1 },
+or { "kind": "step", "name": "intro" }. frames returns every frame, up to 40.
+Colours are palette names (white, black, grey, grey_d, blue, blue_d, teal, green,
+yellow, gold, red, maroon, purple, orange) or #rgb / #rrggbb.
+
+A scene is { camera?: { w, h }, fps?: 1..20, outro?: seconds, state?: { id: value },
+objects: [...], steps?: [...] }. Each object has an id and a kind:
+rectangle, square, circle, dot, line, polygon, arc, arcBetween, arrow, curvedArrow,
+text, decimal, code, codePanel, title, readout, group, labeled, card, flowchart, route.
+A step is { name, meta?, plays }. A play is { "wait": seconds }, { "kind": "set", "values": {} },
+{ "kind": "reveal", "target" } for a flowchart, or { "animations": [...] }.
+Animation kinds: fadeIn, fadeOut, create, write, indicate, flash, transform, moveAlong,
+animate, focus, unfocus, group, lagged. animate calls: shift, moveTo, scale, rotate,
+setFill, setStroke, setOpacity. Rates: linear, smooth, rushInto, rushFrom, thereAndBack,
+easeInQuad, easeOutQuad, easeOutBack, wiggle.
+
+Limits: body 64 KiB, 40 objects, 24 steps, 180 frames (40 when output is frames).
+Flowchart source uses theme for paint; style, classDef, linkStyle, and ::: are rejected.
+
+POST /render
+Content-Type: application/json
+
+{"scene":{"fps":4,"objects":[{"id":"box","kind":"square","side":1,"style":{"stroke":"teal"}}],"steps":[{"name":"in","plays":[{"animations":[{"kind":"create","target":"box"}],"runTime":0.5}]}]},"output":{"format":"svg","width":640,"background":"#112233"}}
 
 ## Examples
 
@@ -99,7 +125,11 @@ JSON bodies, always with "error" and "help": "/llms.txt".
 - 404 unknown or missing scene: { "error": "unknown or missing scene", "scenes": [...names] }
 - 404 unknown step:             { "error": "unknown step NAME", "steps": [...names] }
 - 400 bad t:                    { "error": "t must be a number of seconds" }
-- 400 bad w:                    { "error": "w must be a positive number of pixels" }
+- 400 bad w:                    { "error": "width must be an integer from 32 to 1280" }
+- 400 invalid scene:           { "error": "invalid scene", "errors": [{ "path", "message" }] }
+- 405 method:                  { "error": "method not allowed" }
+- 413 body too large:          { "error": "body too large" }
+- 500 unexpected:               { "error": "internal error" }
 
 ## Scenes
 
@@ -112,7 +142,7 @@ marks steps, and this.state is what traces record. A scene can also be data: a J
 of nodes, edges, code and step ops, played by sceneFromDoc(doc) (docs/DOC-FORMAT.md).
 Register it in scenes/index.ts, then:
 
-  npm run dev                       live player at http://localhost:5173/?scene=NAME
+  npm run dev                       live player at http://127.0.0.1:5173/?scene=NAME
   npm run see -- NAME STEP          a frame as text, plus the step's state diff
   npm run shot -- NAME              contact sheet PNG: the end of every step
   npm run verify:motion -- NAME     teleports, pops, cuts, flicker
@@ -129,43 +159,39 @@ async function firstExample(): Promise<[scene: string, step: string]> {
 
 const text = (body: string): Response => new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', vary: 'Accept', ...CORS } });
 
+/** A thrown Response is the request's reply. Anything else is a 500 with no exception text. */
+export function failureResponse(e: unknown): Response {
+  if (e instanceof Response) return e;
+  return jsonResponse({ error: 'internal error', help: '/llms.txt' }, 500, 'nostore');
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const route = url.pathname;
     try {
-      if (route === '/llms.txt') return text(await llmsTxt(url.origin));
-      if (route === '/' && !/text\/html|application\/xhtml\+xml/.test(request.headers.get('accept') ?? '')) {
+      if ((request.method === 'GET' || request.method === 'HEAD') && route === '/llms.txt') return text(await llmsTxt(url.origin));
+      if (request.method === 'GET' && route === '/' && !/text\/html|application\/xhtml\+xml/.test(request.headers.get('accept') ?? '')) {
         return text(await llmsTxt(url.origin));
       }
-      if (!['/index.json', '/trace.json', '/frame.svg', '/text'].includes(route)) {
-        if (!env.ASSETS) return json({ error: 'no assets bound' }, 404);
-        const res = await env.ASSETS.fetch(request);
-        if (route !== '/') return res;
-        const page = new Response(res.body, res); // "/" varies by Accept; tell caches
-        page.headers.set('vary', 'Accept');
-        return page;
+      if (isApiRoute(route)) {
+        if (request.method === 'OPTIONS') return preflight(route);
+        if (request.method === 'POST') return await handlePost(request, route);
+        if (request.method !== 'GET') return methodNotAllowedResponse(route);
+        if (route === '/render') return methodNotAllowedResponse(route);
+        const name = url.searchParams.get('scene');
+        if (route === '/index.json' && !name) return jsonResponse({ scenes: sceneList(), help: '/llms.txt' }, 200);
+        const { Scene } = lookupScene(name);
+        return await handleGet(route, url, Scene);
       }
-      const name = url.searchParams.get('scene');
-      if (route === '/index.json' && !name) return json({ scenes: sceneList(), help: '/llms.txt' });
-      const entry = name == null ? undefined : SCENES[name];
-      if (!entry) return fail(404, { error: 'unknown or missing scene', scenes: Object.keys(SCENES) });
-      const { Scene } = entry;
-      if (route === '/index.json') return json(await indexScene(Scene));
-      if (route === '/trace.json') return json(await traceScene(Scene));
-      const t = await resolveTime(Scene, url);
-      if (route === '/frame.svg') {
-        const width = Number(url.searchParams.get('w') ?? 1280);
-        if (!(width > 0 && Number.isFinite(width))) fail(400, { error: 'w must be a positive number of pixels' });
-        const sink = new SnapshotSink({ width });
-        await renderAt(Scene, t, sink);
-        return new Response(sink.svg, { headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=3600', ...CORS } });
-      }
-      const scene = await renderAt(Scene, t, { async frame() {} });
-      return new Response(renderText(scene), { headers: { 'content-type': 'text/plain; charset=utf-8', ...CORS } });
+      if (!env.ASSETS) return jsonResponse({ error: 'no assets bound' }, 404);
+      const res = await env.ASSETS.fetch(request);
+      if (route !== '/') return res;
+      const page = new Response(res.body, res); // "/" varies by Accept; tell caches
+      page.headers.set('vary', 'Accept');
+      return page;
     } catch (e) {
-      if (e instanceof Response) return e;
-      throw e;
+      return failureResponse(e);
     }
   },
 };

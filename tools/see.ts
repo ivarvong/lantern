@@ -3,12 +3,12 @@
 // Prints the frame as text (src/ascii.ts), plus the step's state diff from the trace.
 import { writeFileSync } from 'node:fs';
 import { renderAt, renderText, traceScene, toSvgString } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { SCENES, sceneByName } from '../scenes/index.ts';
 
 const args = process.argv.slice(2);
 const svgOut = args.includes('--svg') ? args[args.indexOf('--svg') + 1] : null;
 const [name, at] = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--svg');
-const entry = name == null ? undefined : SCENES[name];
+const entry = name == null ? undefined : sceneByName(name);
 if (!entry) {
   console.error(`usage: npm run see -- <scene> [step | seconds] [--svg file]\nscenes: ${Object.keys(SCENES).join(', ')}`);
   process.exit(2);

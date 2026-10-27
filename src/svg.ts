@@ -6,6 +6,7 @@ import { VMobject } from './vmobject.ts';
 import type { PathData } from './vmobject.ts';
 import type { Mobject, StyleRecord } from './mobject.ts';
 import type { Scene, Sink } from './scene.ts';
+import { canonicalHex } from './color.ts';
 import { perf } from './perf.ts';
 
 export const FRAME = { w: 16, h: 9 } as const;
@@ -178,37 +179,103 @@ function vmobjectAttrs(m: VMobject, s: StyleRecord, pd: { d: string }): Attrs {
 }
 
 
-const ESC = /[&<>"]/;
-const esc = (v: unknown): string => {
-  const str = String(v);
-  // Most values (numbers, colors, path data) contain nothing to escape: one test, no allocation
-  return ESC.test(str) ? str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') : str;
-};
+const ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+
+/** XML 1.0 Char, excluding the surrogate range (those are checked as pairs). */
+function xmlCharOk(code: number): boolean {
+  return code === 0x9 || code === 0xa || code === 0xd || (code >= 0x20 && code <= 0xd7ff) || (code >= 0xe000 && code <= 0xfffd);
+}
+
+/**
+ * Attribute and text data: drop code points XML 1.0 cannot represent, then
+ * escape the four markup characters. A value with nothing to change is returned
+ * as-is (path data and colours take this path).
+ */
+function esc(v: string): string {
+  let dirty = false;
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = v.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) { i++; continue; }
+    }
+    if (c === 38 || c === 60 || c === 62 || c === 34 || !xmlCharOk(c)) { dirty = true; break; }
+  }
+  if (!dirty) return v;
+  let out = '';
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = v.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) { out += v[i]! + v[i + 1]!; i++; continue; }
+    }
+    if (!xmlCharOk(c)) continue;
+    const ch = v[i]!;
+    out += ESCAPES[ch] ?? ch;
+  }
+  return out;
+}
 
 const attrStrings = new WeakMap<Attrs, string>(); // attrs object -> ' k="v" ...'
 function serializeAttrs(attrs: Attrs): string {
   let s = attrStrings.get(attrs);
   if (s === undefined) {
     s = '';
-    for (const k in attrs) s += ` ${k}="${esc(attrs[k])}"`;
+    // Own keys only: a polluted Object.prototype must not become an attribute
+    for (const k of Object.keys(attrs)) s += ` ${k}="${esc(attrs[k] ?? '')}"`;
     attrStrings.set(attrs, s);
   }
   return s;
 }
 function serializeElement(el: ElementRecord): string {
-  const t = el.transform ? ` transform="${el.transform}"` : '';
+  const t = el.transform ? ` transform="${esc(el.transform)}"` : '';
   return `<${el.tag}${t}${serializeAttrs(el.attrs)}` + (el.text == null ? '/>' : `>${esc(el.text)}</${el.tag}>`);
 }
 
 export interface SvgOptions {
-  /** Pixel width; height follows the scene's camera. */
+  /** Pixel width; height follows the scene's camera. An integer from 1 to 4096. */
   width?: number;
+  /** `#rgb` or `#rrggbb`. */
   background?: string;
 }
 
-export function toSvgString(scene: Scene, { width = 1280, background = '#1a1a1a' }: SvgOptions = {}): string {
-  const frame = scene.frame ?? FRAME;
+declare const svgWidthBrand: unique symbol;
+/** An integer pixel width that toSvgString has accepted. */
+export type SvgWidth = number & { readonly [svgWidthBrand]: 'SvgWidth' };
+
+declare const svgColorBrand: unique symbol;
+/** A lowercase `#rrggbb` colour that toSvgString has accepted. */
+export type SvgColor = string & { readonly [svgColorBrand]: 'SvgColor' };
+
+const SVG_WIDTH_MAX = 4096;
+
+/** Integer pixel width in range. Objects are rejected, even when toString returns a number. */
+export function svgWidth(value: unknown): SvgWidth {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > SVG_WIDTH_MAX) {
+    throw new TypeError('svg width must be an integer from 1 to 4096');
+  }
+  return value as SvgWidth;
+}
+
+/** `#rgb` or `#rrggbb`, as lowercase `#rrggbb`. */
+export function svgColor(value: unknown): SvgColor {
+  const hex = canonicalHex(value);
+  if (hex == null) throw new TypeError('svg background must be a #rgb or #rrggbb colour');
+  return hex as SvgColor;
+}
+
+function frameSize(n: unknown): number {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) throw new TypeError('svg camera must be a finite positive size');
+  return n;
+}
+
+export function toSvgString(scene: Scene, opts: SvgOptions = {}): string {
+  const width = svgWidth(opts.width ?? 1280);
+  const background = svgColor(opts.background ?? '#1a1a1a');
+  const raw = scene.frame ?? FRAME;
+  const frame = { w: frameSize(raw.w), h: frameSize(raw.h) };
   const height = Math.round(width * frame.h / frame.w);
+  if (!Number.isSafeInteger(height) || height < 1) throw new TypeError('svg height must be a positive integer');
   let s = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${viewBoxOf(frame)}">`;
   s += `<rect x="${-frame.w / 2 * UNITS}" y="${-frame.h / 2 * UNITS}" width="${frame.w * UNITS}" height="${frame.h * UNITS}" fill="${background}"/>`;
   const els = renderElements(scene);
@@ -270,11 +337,12 @@ export class DomSink implements Sink {
 
   constructor(container: Element, { background = '#1a1a1a', realtime = true }: { background?: string; realtime?: boolean } = {}) {
     const NS = 'http://www.w3.org/2000/svg';
+    const paint = svgColor(background);
     // A container in a live document always has one
     this.doc = container.ownerDocument!;
     this.svg = this.doc.createElementNS(NS, 'svg');
     this.svg.setAttribute('viewBox', viewBoxOf());
-    this.svg.style.background = background;
+    this.svg.style.background = paint;
     this.svg.style.width = '100%';
     this.svg.style.display = 'block';
     container.appendChild(this.svg);
@@ -358,12 +426,12 @@ export class DomSink implements Sink {
         continue;
       }
       node.attrsRef = rec.attrs;
-      for (const k in rec.attrs) {
-        const v = rec.attrs[k]!;
+      for (const k of Object.keys(rec.attrs)) {
+        const v = rec.attrs[k] ?? '';
         if (node.attrs[k] !== v) { node.el.setAttribute(k, v); node.attrs[k] = v; muts++; if (k === 'd') dMuts++; }
       }
-      for (const k in node.attrs) {
-        if (!(k in rec.attrs)) { node.el.removeAttribute(k); delete node.attrs[k]; }
+      for (const k of Object.keys(node.attrs)) {
+        if (!Object.hasOwn(rec.attrs, k)) { node.el.removeAttribute(k); delete node.attrs[k]; }
       }
       if (rec.text !== node.text) { node.el.textContent = rec.text ?? ''; node.text = rec.text; }
       // Keep document order equal to draw order with minimal moves

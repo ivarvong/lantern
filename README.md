@@ -18,7 +18,7 @@ The repo is TypeScript throughout. Node 24 runs the tools and tests as `.ts` dir
 
 ```
 npm install
-npm run dev        # http://localhost:5173/?scene=pyex-limits, reloads on save, keeps your step
+npm run dev        # http://127.0.0.1:5173/?scene=pyex-limits, reloads on save, keeps your step
 npm test           # ~8 s; FULL=1 (npm run test:full) checks every frame
 npm run check      # tsc over every project, emits dist/
 ```
@@ -94,7 +94,7 @@ scenes/     example scenes and the registry (index.ts)
 app/        the player (player.ts, DomSink) and the Worker (worker.ts): the only runtime-specific code
 tools/      dev server, build, inspection, verifiers, perf tools (Node; Chromium via playwright-core)
 test/       node --test; golden-traces.json hashes each scene's trace (UPDATE_GOLDEN=1 to bless)
-vendor/     the glyph shaper bundle (tools/vendor-glyph.ts) and its types
+vendor/     the glyph shaper bundle (tools/vendor-glyph.ts), its types, and glyph.pin.json (sha256, checked in CI)
 docs/       PERF.md, VERIFY.md, DOC-FORMAT.md
 ```
 
@@ -103,18 +103,54 @@ docs/       PERF.md, VERIFY.md, DOC-FORMAT.md
 | | how |
 |---|---|
 | live, in a page | `app/player.ts`: `?scene=&step=` deep links, step mode, copy link |
-| one frame as SVG | `renderAt(Scene, t, new SnapshotSink())`, or Worker `GET /frame.svg?scene=&step=` |
-| one frame as text | `renderText(scene)`, `npm run see`, or Worker `GET /text?scene=&step=` |
-| state at every step | `traceScene(Scene)`, or Worker `GET /trace.json?scene=` |
-| every frame | `npm run render -- <scene>` writes `out/frames/<scene>/*.svg` |
+| one frame as SVG | `renderAt(Scene, t, new SnapshotSink({ width, background }))`, Worker `GET /frame.svg`, or `POST /render` |
+| one frame as text | `renderText(scene)`, `npm run see`, or Worker `GET /text` |
+| one frame as elements | `renderElements(scene)`, or Worker `GET /elements.json` |
+| state at every step | `traceScene(Scene)`, or Worker `GET /trace.json` |
+| steps and duration | `indexScene(Scene)`, or Worker `GET /index.json` |
+| every frame | `new StringSink({ width, background })`, Worker `POST /render` with `"format": "frames"`, or `npm run render` |
 
 Deploy: `npm run deploy` (builds `out/site/`, then `wrangler deploy`).
+
+## HTTP API
+
+The Worker in `app/` exposes the library. A registered demo is a GET. A scene you describe in JSON is a POST, and it can use the same shapes, animations, and outputs as a class in TypeScript. The browser player (`DomSink`) is the live view; HTTP returns strings.
+
+`POST /render` takes `{ "scene", "output" }`. `POST /frame.svg`, `/text`, `/elements.json`, `/trace.json`, and `/index.json` take the scene itself, and the path chooses the output. Query `step`, `t`, `w`, and `background` work on those shortcuts the same way they do on a GET.
+
+```json
+{
+  "scene": {
+    "fps": 4,
+    "objects": [
+      { "id": "box", "kind": "square", "side": 1.4, "style": { "stroke": "teal", "fill": "teal", "fillOpacity": 0.15 } },
+      { "id": "label", "kind": "text", "text": "cache", "fontSize": 0.35 }
+    ],
+    "steps": [
+      { "name": "in", "plays": [{ "animations": [{ "kind": "fadeIn", "target": "box" }, { "kind": "write", "target": "label" }], "runTime": 0.5 }] }
+    ]
+  },
+  "output": { "format": "svg", "width": 640, "background": "#112233", "select": { "kind": "end" } }
+}
+```
+
+`output.format` is `svg`, `frames`, `text`, `elements`, `trace`, or `index`. `svg` and `frames` take `width` (an integer from 32 to 1280, default 1280) and `background` (default `#1a1a1a`). Those are the `SvgOptions` fields. The serializer itself accepts an integer width from 1 to 4096 and a `#rgb` or `#rrggbb` background, and rejects any other value before it is written. `svg`, `text`, and `elements` take `select`: `{ "kind": "end" }`, `{ "kind": "time", "t": 1.5 }`, or `{ "kind": "step", "name": "in" }`. `frames` returns every frame, up to 40. `trace` and `index` describe the whole scene.
+
+A colour is a palette name (`white`, `black`, `grey`, `grey_d`, `blue`, `blue_d`, `teal`, `green`, `yellow`, `gold`, `red`, `maroon`, `purple`, `orange`) or `#rgb` / `#rrggbb`. `none` is a paint, not a background. Object kinds are `rectangle`, `square`, `circle`, `dot`, `line`, `polygon`, `arc`, `arcBetween`, `arrow`, `curvedArrow`, `text`, `decimal`, `code`, `codePanel`, `title`, `readout`, `group`, `labeled`, `card`, `flowchart`, and `route`. Animation kinds are `fadeIn`, `fadeOut`, `create`, `write`, `indicate`, `flash`, `transform`, `moveAlong`, `animate`, `focus`, `unfocus`, `group`, and `lagged`. An `animate` call is `shift`, `moveTo`, `scale`, `rotate`, `setFill`, `setStroke`, or `setOpacity`. Rates are `linear`, `smooth`, `rushInto`, `rushFrom`, `thereAndBack`, `easeInQuad`, `easeOutQuad`, `easeOutBack`, and `wiggle`.
+
+Flowchart paint comes from `theme`. The source must not use `style`, `classDef`, `linkStyle`, or `:::`.
+
+The body is at most 64 KiB. A scene has at most 40 objects, 24 steps, and 180 frames (40 when the output is `frames`). A request that fails those checks is a 400 `{ "error", "errors": [{ "path", "message" }], "help": "/llms.txt" }`. An unknown demo is a 404. A body over the limit is a 413.
+
+Responses send `access-control-allow-origin: *`. The API is unauthenticated and sets no cookies; a response is a public demo or the caller's own render, so any origin may read it. Preflight allows `content-type` and `accept`. SVG responses also send `x-content-type-options: nosniff` and `content-security-policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'none'`. POST responses are `no-store`. GET frames from the registry stay `public, max-age=3600`.
+
+`GET /llms.txt` is the same contract, with the demo names and their steps.
 
 ## Commands
 
 | | |
 |---|---|
-| `npm run dev` | source tree as native ES modules, live reload |
+| `npm run dev` | source tree as native ES modules on 127.0.0.1, live reload |
 | `npm run build` | single-file player pages in `out/` (esbuild, ~80 ms) |
 | `npm test` / `test:full` | sampled frames / every frame |
 | `npm run check` | `tsc -b` over every project (library, app, tools and tests), emit `dist/`, compile a TypeScript consumer against it |

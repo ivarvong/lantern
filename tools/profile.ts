@@ -4,13 +4,13 @@ import { Session } from 'node:inspector/promises';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { renderElements, toSvgString } from '../src/index.ts';
 import type { Sink } from '../src/index.ts';
-import { SCENES } from '../scenes/index.ts';
+import { requireScene } from './scene.ts';
 
 const args = process.argv.slice(2);
 const opt = (k: string, d: string | number): string => args.find((a) => a.startsWith(`--${k}=`))?.split('=')[1] ?? String(d);
 const name = args.find((a) => !a.startsWith('--')) ?? 'pyex-limits';
 const sinkKind = opt('sink', 'string');
-const { Scene } = SCENES[name]!;
+const { Scene } = requireScene(name);
 const sink: Sink = { async frame(scene) {
   if (sinkKind === 'string') toSvgString(scene);
   else if (sinkKind === 'dom') renderElements(scene, { relative: false });

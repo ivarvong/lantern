@@ -50,6 +50,7 @@
     "src",
     "vendor/glyph.js",
     "vendor/glyph.d.ts",
+    "vendor/glyph.pin.json",
     "README.md",
     "docs",
     "LICENSE"

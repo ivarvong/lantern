@@ -403,7 +403,7 @@ export class Mobject {
     // Field by field over whatever the style holds: numbers lerp, colors blend
     const mine = this.style as Record<string, string | number | undefined>;
     const sa = a.style as Record<string, string | number | undefined>, sb = b.style as Record<string, string | number | undefined>;
-    for (const k in mine) {
+    for (const k of Object.keys(mine)) {
       const va = sa[k], vb = sb[k];
       if (va === vb) { mine[k] = va; continue; }
       // Exact at the ends: a + (b - a) * 1 is not always b in floating point
